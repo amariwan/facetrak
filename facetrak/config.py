@@ -15,6 +15,11 @@ DEFAULT_CONFIG = {
     "detect_width": 480,
     "recog_threshold": 0.36,  # SFace cosine similarity
     "blur_unknown": False,
+    "blur_persons": [],
+    "heatmap": False,
+    "api_port": 8765,
+    "servo_target": "largest",
+    "notifications": True,
     "servo": {
         "port": "",
         "baud": 9600,

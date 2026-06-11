@@ -1,32 +1,40 @@
-"""Multi-face IoU tracker with stable IDs and identity smoothing.
+"""Multi-face IoU tracker with stable IDs, identity smoothing, and re-ID.
 
-Detections are matched to existing tracks greedily by IoU. Each track keeps
-a rolling vote over recognized names so a single bad frame cannot flip an
-identity, plus timing data for presence statistics.
+When a track ends its last known embedding is stored in a short-lived cache.
+If a new track appears within _REID_TIMEOUT seconds and its embedding matches
+at >= _REID_SIM cosine similarity, it inherits the old track's identity and
+announced state so the presence log doesn't create a duplicate entry.
 """
 import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from .detection import FaceDetection
 
-_IOU_MATCH = 0.3
-_MAX_MISSED = 15        # frames a track survives without a detection
-_VOTE_WINDOW = 12       # recent recognition results considered per track
-_MIN_VOTES = 3          # sightings needed before a name is trusted
+_IOU_MATCH    = 0.3
+_MAX_MISSED   = 15
+_VOTE_WINDOW  = 12
+_MIN_VOTES    = 3
+_REID_TIMEOUT = 8.0
+_REID_SIM     = 0.50
 
 
 @dataclass
 class Track:
     track_id: int
     det: FaceDetection
-    first_seen: float = field(default_factory=time.time)
-    last_seen: float = field(default_factory=time.time)
+    first_seen: float = field(default_factory=time.monotonic)
+    last_seen: float = field(default_factory=time.monotonic)
     missed: int = 0
     name: str | None = None
     sim: float = 0.0
     announced: bool = False
     blink_count: int = 0
+    age: str = "?"
+    gender: str = "?"
+    embedding: np.ndarray | None = field(default=None, repr=False)
     _eyes_closed: bool = False
     _votes: deque = field(default_factory=lambda: deque(maxlen=_VOTE_WINDOW))
 
@@ -47,7 +55,6 @@ class Track:
             if n >= _MIN_VOTES:
                 self.name, self.sim = top, sim if name == top else self.sim
                 return
-        # not enough evidence (yet, or anymore)
         if self._votes.count(None) > len(self._votes) // 2:
             self.name = None
         self.sim = sim
@@ -56,6 +63,14 @@ class Track:
         if eyes_closed and not self._eyes_closed:
             self.blink_count += 1
         self._eyes_closed = eyes_closed
+
+
+@dataclass
+class _LostTrack:
+    track_id: int
+    name: str | None
+    embedding: np.ndarray | None
+    lost_at: float = field(default_factory=time.monotonic)
 
 
 def _iou(a: FaceDetection, b: FaceDetection) -> float:
@@ -72,11 +87,14 @@ class FaceTracker:
     def __init__(self):
         self.tracks: list[Track] = []
         self._next_id = 1
+        self._lost: list[_LostTrack] = []
 
     def update(self, detections: list[FaceDetection]
                ) -> tuple[list[Track], list[Track]]:
-        """Match detections to tracks; returns (active_tracks, ended_tracks)."""
-        now = time.time()
+        now = time.monotonic()
+        self._lost = [l for l in self._lost
+                      if now - l.lost_at < _REID_TIMEOUT]
+
         unmatched = list(detections)
         for track in self.tracks:
             best_iou, best_det = 0.0, None
@@ -92,13 +110,43 @@ class FaceTracker:
             else:
                 track.missed += 1
 
-        for det in unmatched:
-            self.tracks.append(Track(track_id=self._next_id, det=det))
-            self._next_id += 1
-
         ended = [t for t in self.tracks if t.missed > _MAX_MISSED]
+        for t in ended:
+            if t.embedding is not None:
+                self._lost.append(
+                    _LostTrack(t.track_id, t.name, t.embedding))
         self.tracks = [t for t in self.tracks if t.missed <= _MAX_MISSED]
+
+        for det in unmatched:
+            new_id = self._next_id
+            t = Track(track_id=new_id, det=det)
+            self._next_id += 1
+            self.tracks.append(t)
+
         return self.active, ended
+
+    def set_embedding(self, track_id: int, emb: np.ndarray | None):
+        """Store the latest SFace embedding on a track for future re-ID."""
+        for t in self.tracks:
+            if t.track_id == track_id:
+                t.embedding = emb
+                return
+
+    def try_reid(self, track_id: int, emb: np.ndarray | None) -> str | None:
+        """Check if a new track matches a recently lost face."""
+        if emb is None or not self._lost:
+            return None
+        best_sim, best = 0.0, None
+        for lost in self._lost:
+            if lost.embedding is None:
+                continue
+            sim = float(emb @ lost.embedding)
+            if sim > best_sim:
+                best_sim, best = sim, lost
+        if best is not None and best_sim >= _REID_SIM:
+            self._lost.remove(best)
+            return best.name
+        return None
 
     @property
     def active(self) -> list[Track]:
@@ -110,3 +158,4 @@ class FaceTracker:
 
     def reset(self):
         self.tracks.clear()
+        self._lost.clear()

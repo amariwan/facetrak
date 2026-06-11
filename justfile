@@ -9,6 +9,10 @@ pip := venv / "bin" / "pip"
 run:
     {{python}} -m facetrak
 
+# Start HTTP REST API server (port 8765 by default)
+api-serve port="8765":
+    {{python}} -m facetrak.api {{port}}
+
 # Start MCP server for LLM integration (stdio)
 mcp-serve:
     {{python}} -m facetrak.mcp_server

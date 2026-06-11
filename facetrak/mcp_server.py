@@ -376,5 +376,94 @@ def servo_set_angle(pan: int, tilt: int) -> str:
     return f"Pan: {actual_pan:.0f}, Tilt: {actual_tilt:.0f}"
 
 
+@server.tool(description="Get gaze direction for the primary face "
+                         "(gaze_h -1=left 1=right, gaze_v -1=up 1=down, label)")
+def get_gaze() -> str:
+    e = _get_engine()
+    if not e.running:
+        return "Camera not running."
+    m = e.metrics
+    return (f"Gaze: {m.gaze_label}\n"
+            f"Horizontal: {m.gaze_h:.3f}\n"
+            f"Vertical: {m.gaze_v:.3f}")
+
+
+@server.tool(description="Get age and gender estimate for each tracked face")
+def get_age_gender() -> str:
+    e = _get_engine()
+    if not e.running:
+        return "Camera not running."
+    faces = e.live_faces()
+    if not faces:
+        return "No faces in view."
+    return "\n".join(
+        f"  #{f['id']} {f['name']}: {f['gender']}, age {f['age']}"
+        for f in faces)
+
+
+@server.tool(description="Get crowd statistics for this session "
+                         "(peak, average, total appearances)")
+def get_crowd_stats() -> str:
+    from facetrak import db as _db
+    s = _db.crowd_summary()
+    return (f"Peak simultaneous: {s['peak']}\n"
+            f"Average: {s['avg']}\n"
+            f"Total appearances: {s['total_appearances']}")
+
+
+@server.tool(description="Export crowd data to CSV; returns the file path")
+def export_crowd_csv() -> str:
+    e = _get_engine()
+    path = e.export_crowd_csv()
+    return f"Exported to: {path}" if path else "No crowd data yet."
+
+
+@server.tool(description="Export emotion timeline to CSV; returns the file path")
+def export_emotion_csv() -> str:
+    e = _get_engine()
+    path = e.export_emotion_csv()
+    return f"Exported to: {path}" if path else "No emotion data yet."
+
+
+@server.tool(description="Toggle the face-position heatmap overlay")
+def toggle_heatmap() -> str:
+    e = _get_engine()
+    state = e.toggle_heatmap()
+    return f"Heatmap {'on' if state else 'off'}."
+
+
+@server.tool(description="Set which face the servo follows: "
+                         "'largest', 'known', or 'unknown'")
+def set_servo_target(mode: str) -> str:
+    e = _get_engine()
+    try:
+        e.set_servo_target(mode)
+        return f"Servo target: {mode}."
+    except AssertionError:
+        return f"Invalid mode '{mode}'. Choose: largest, known, unknown."
+
+
+@server.tool(description="Blur (or un-blur) a specific registered person "
+                         "even when they are recognised")
+def set_person_blur(name: str, blur: bool) -> str:
+    e = _get_engine()
+    e.set_blur_person(name, blur)
+    return f"'{name}' {'will' if blur else 'will not'} be blurred."
+
+
+@server.tool(description="Get face quality score (0-1) for each tracked face")
+def get_face_quality() -> str:
+    e = _get_engine()
+    if not e.running:
+        return "Camera not running."
+    faces = e.live_faces()
+    if not faces:
+        return "No faces in view."
+    from facetrak.quality import label as qlabel
+    return "\n".join(
+        f"  #{f['id']} {f['name']}: {f['quality']:.2f} ({qlabel(f['quality'])})"
+        for f in faces)
+
+
 def run():
     server.run(transport="stdio")
