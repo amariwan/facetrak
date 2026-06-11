@@ -8,3 +8,6 @@ face_landmarker.task
 snap_*.png
 recording_*.mp4
 config.json
+*.onnx
+events.jsonl
+snapshot_*.png

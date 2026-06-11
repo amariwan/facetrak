@@ -1,6 +1,6 @@
 # MCP Server API Reference
 
-The `facetrak-mcp` command starts an MCP (Model Context Protocol) server over stdio, exposing 20 tools for face detection, recognition, and tracking.
+The `facetrak-mcp` command starts an MCP (Model Context Protocol) server over stdio, exposing 24 tools for face detection, recognition, and tracking.
 
 **Server name:** `FaceTrak`
 
@@ -165,3 +165,22 @@ The servo controller communicates with an Arduino via serial at 115200 baud.
 **Response:** `OK <pan> <tilt>\n` or `ERR\n`
 
 The Arduino firmware steps toward the target at a maximum of 3° per 15 ms for smooth motion.
+
+
+## Analysis & Presence Tools
+
+### `get_live_faces`
+
+List all faces currently in view: track ID, identity, similarity, dwell time, blink count, bounding box.
+
+### `get_face_analysis`
+
+Expression and pose analysis of the primary face: emotion, smile, mouth-open, brow-raise, eye openness (L/R), attention flag, head pose (yaw/pitch/roll).
+
+### `presence_history(limit: int = 30)`
+
+Show the presence event history (who appeared/left, when, and for how long) from `events.jsonl`.
+
+### `take_snapshot`
+
+Save the current camera frame (with overlay) as `snapshot_<timestamp>.png` and return its path.

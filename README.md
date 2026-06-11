@@ -6,9 +6,12 @@ Real-time face detection, recognition, and pan-tilt tracking with OpenCV and Med
 
 ## Features
 
-- **Face detection** via Google MediaPipe BlazeFace (short-range model)
-- **Face recognition** using HOG feature encoding with eye-alignment and CLAHE
-- **Head pose estimation** — yaw, pitch, roll via MediaPipe landmarks + solvePnP
+- **Face detection** via OpenCV YuNet (multi-face, 5-point landmarks)
+- **Face recognition** with SFace deep embeddings — aligned 128-d vectors, top-k cosine matching with ambiguity rejection
+- **Multi-face tracking** — stable IDs via IoU matching, identity smoothing by majority vote, per-face dwell time
+- **Expression analysis** — emotion (happy/sad/angry/surprised/neutral), smile, mouth/brow activity, eye openness, blink counting (MediaPipe blendshapes)
+- **Head pose & attention** — yaw, pitch, roll via solvePnP; attention flag when facing the camera
+- **Presence log** — JSONL history of who appeared/left, when, and for how long
 - **Pan-tilt servo tracking** — serial communication with Arduino to physically follow faces
 - **Video recording** — MP4 capture of the tracking session
 - **Privacy blur** — pixelate unknown faces on demand
@@ -44,7 +47,7 @@ just sim
 - Arduino + servos (optional, for physical tracking)
 - Webcam (built-in or USB)
 
-Model files are auto-downloaded from Google on first run (~100 KB detector, ~5 MB landmarker).
+Model files are auto-downloaded on first run (~350 KB YuNet detector, ~37 MB SFace recognizer, ~5 MB landmarker).
 
 ## Commands
 
@@ -71,7 +74,7 @@ facetrak
 
 Toolbar controls: Start/Stop camera, Record video, Blur toggle, Servo toggle, Register person, List faces, Simulation window, camera selector.
 
-The status bar shows: camera name, face position, servo angles (pan/tilt), head pose (yaw/pitch/roll), recording state, and known face count.
+The status bar shows: camera name, face position, servo angles, head pose, emotion, live face count, recording state, and known face count.
 
 ### MCP Mode
 
@@ -79,7 +82,7 @@ The status bar shows: camera name, face position, servo angles (pan/tilt), head 
 facetrak-mcp
 ```
 
-Connect any MCP-compatible client (Claude Desktop, etc.) to this stdio server. 20 tools available — see [docs/MCP_API.md](docs/MCP_API.md).
+Connect any MCP-compatible client (Claude Desktop, etc.) to this stdio server. 24 tools available — see [docs/MCP_API.md](docs/MCP_API.md).
 
 ### Registration
 
@@ -88,7 +91,7 @@ Face data is stored as `.npy` files in `faces/data/`. To register a person:
 1. Ensure the person is visible to the camera
 2. Click **Register** in the GUI, or use `register_person` via MCP
 3. Look at the camera for ~3 seconds (samples are filtered by sharpness & brightness)
-4. The system captures 128×128 HOG feature vectors and stores them
+4. The system captures up to 20 quality-filtered SFace embeddings (128-d) and stores them
 
 ## Configuration
 
@@ -98,7 +101,7 @@ Settings are persisted in `config.json`:
 |---|---|---|
 | `camera` | `0` | Active camera index |
 | `detect_width` | `480` | Detection resolution (width) |
-| `recog_threshold` | `0.55` | Recognition similarity threshold |
+| `recog_threshold` | `0.36` | SFace cosine similarity threshold |
 | `blur_unknown` | `false` | Privacy blur for unrecognized faces |
 | `servo.port` | `""` | Serial port for Arduino |
 | `servo.baud` | `9600` | Serial baud rate |
@@ -122,10 +125,13 @@ facetrak/
 ├── __main__.py    CLI entry point (Tkinter GUI)
 ├── config.py      JSON config load/save
 ├── engine.py      Core loop: camera, detection, tracking, recognition
-├── facedb.py      HOG-based face recognition database
-├── mcp_server.py  MCP server (20 tools for LLM integration)
+├── detection.py   YuNet face detector wrapper
+├── facedb.py      SFace embedding face recognition database
+├── tracker.py     Multi-face IoU tracker with stable IDs
+├── analysis.py    Head pose + expression/emotion analysis (blendshapes)
+├── events.py      JSONL presence log
+├── mcp_server.py  MCP server (24 tools for LLM integration)
 ├── notifier.py    macOS desktop notifications
-├── pose.py        3D head pose estimation (yaw/pitch/roll)
 ├── recorder.py    Video recording (MP4)
 ├── servo.py       Serial pan-tilt controller
 ├── simulation.py  2D animated pan-tilt simulation
