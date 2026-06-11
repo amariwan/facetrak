@@ -1,22 +1,51 @@
+"""Face recognition database backed by OpenCV SFace embeddings.
+
+SFace produces 128-d unit embeddings from a 112x112 aligned crop; this is
+far more accurate and pose-robust than classic HOG matching. Per person we
+store a matrix of embeddings (one row per registration sample) and match a
+probe by mean of its top-k cosine similarities.
+"""
+import logging
+import urllib.request
+from pathlib import Path
+
 import cv2
 import numpy as np
-from pathlib import Path
-from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 FACE_DIR = Path("faces") / "data"
-FACE_W, FACE_H = 64, 128
+EMBED_DIM = 128
+
+_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+              "face_recognition_sface/face_recognition_sface_2021dec.onnx")
+_MODEL_PATH = Path("face_recognition_sface.onnx")
+
 _MIN_SAMPLES = 3
 _TOP_K = 3
+# Cosine-similarity margin: best match must beat the runner-up clearly,
+# otherwise we report "unknown" rather than risk a misidentification.
+_AMBIGUITY_RATIO = 1.15
+
+
+def _ensure_model() -> Path:
+    if not _MODEL_PATH.exists():
+        logger.info("Downloading SFace recognition model (~37MB)...")
+        urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+    return _MODEL_PATH
 
 
 class FaceDatabase:
     def __init__(self):
         self.names: list[str] = []
         self.encodings: list[np.ndarray] = []
-        self._hog = cv2.HOGDescriptor()
-        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        self._eye_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_eye.xml")
+        self._recognizer = None
+
+    def _ensure_recognizer(self):
+        if self._recognizer is None:
+            self._recognizer = cv2.FaceRecognizerSF.create(
+                str(_ensure_model()), "")
+        return self._recognizer
 
     def load(self):
         FACE_DIR.mkdir(parents=True, exist_ok=True)
@@ -25,16 +54,63 @@ class FaceDatabase:
         for f in sorted(FACE_DIR.iterdir()):
             if f.suffix != ".npy":
                 continue
-            name = f.stem.replace("_", " ")
             data = np.load(str(f))
             if data.ndim == 1:
                 data = data.reshape(1, -1)
-            self.names.append(name)
+            if data.ndim == 4:
+                data = self._migrate_image_samples(f, data)
+                if data is None:
+                    continue
+            if data.ndim != 2 or data.shape[1] != EMBED_DIM:
+                logger.warning(
+                    "Skipping %s: incompatible encoding %s, "
+                    "please re-register this person", f.name, data.shape)
+                continue
+            self.names.append(f.stem.replace("_", " "))
             self.encodings.append(data)
 
-    def register(self, name: str, samples: list[np.ndarray]) -> bool:
-        feats = [f for f in (self._encode(s) for s in samples if s.size > 0)
-                 if f is not None]
+    def _migrate_image_samples(self, path: Path, images: np.ndarray
+                               ) -> np.ndarray | None:
+        """Convert legacy raw-image samples (N,H,W,3) to SFace embeddings."""
+        from .detection import YuNetDetector
+        logger.info("Migrating %s from image samples to SFace embeddings",
+                    path.name)
+        detector = YuNetDetector()
+        feats = []
+        for img in images:
+            dets = detector.detect(np.ascontiguousarray(img))
+            if not dets:
+                continue
+            best = max(dets, key=lambda d: d.score)
+            emb = self.embed(img, best.row)
+            if emb is not None:
+                feats.append(emb)
+        if len(feats) < _MIN_SAMPLES:
+            logger.warning("Migration of %s failed (%d usable samples), "
+                           "please re-register", path.name, len(feats))
+            return None
+        matrix = np.stack(feats, axis=0)
+        np.save(str(path), matrix)
+        return matrix
+
+    def embed(self, frame: np.ndarray, det_row: np.ndarray
+              ) -> np.ndarray | None:
+        """Aligned SFace embedding for one YuNet detection row.
+
+        `frame` must be the same image the detection ran on (coordinates
+        of `det_row` are interpreted relative to it).
+        """
+        try:
+            rec = self._ensure_recognizer()
+            chip = rec.alignCrop(frame, det_row)
+            feat = rec.feature(chip).flatten().astype(np.float32)
+        except cv2.error:
+            return None
+        norm = np.linalg.norm(feat)
+        return feat / norm if norm > 0 else None
+
+    def register(self, name: str, embeddings: list[np.ndarray]) -> bool:
+        feats = [e for e in embeddings if e is not None]
         if len(feats) < _MIN_SAMPLES:
             return False
         matrix = np.stack(feats, axis=0)
@@ -43,57 +119,23 @@ class FaceDatabase:
         self.load()
         return True
 
-    def predict(self, face_bgr: np.ndarray, threshold: float = 0.50
-                ) -> tuple[Optional[str], float]:
-        feat = self._encode(face_bgr)
-        if feat is None or not self.encodings:
+    def predict(self, embedding: np.ndarray | None, threshold: float = 0.36
+                ) -> tuple[str | None, float]:
+        if embedding is None or not self.encodings:
             return None, 0.0
-        scores = []
+        scores: list[tuple[float, str]] = []
         for name, encs in zip(self.names, self.encodings):
-            sims = encs @ feat
+            sims = encs @ embedding
             k = min(_TOP_K, len(sims))
-            sim = float(np.mean(np.partition(sims, -k)[-k:]))
-            scores.append((sim, name))
-        scores.sort(key=lambda x: -x[0])
+            scores.append((float(np.mean(np.partition(sims, -k)[-k:])), name))
+        scores.sort(key=lambda s: -s[0])
         best_sim, best_name = scores[0]
         second_sim = scores[1][0] if len(scores) > 1 else 0.0
-        ratio = best_sim / (second_sim + 1e-8) if second_sim > 0.1 else 2.0
-        if best_sim < threshold or ratio < 1.12:
+        ambiguous = (second_sim > 0.1
+                     and best_sim / (second_sim + 1e-8) < _AMBIGUITY_RATIO)
+        if best_sim < threshold or ambiguous:
             return None, best_sim
         return best_name, best_sim
-
-    def _align(self, face_bgr: np.ndarray) -> np.ndarray:
-        h, w = face_bgr.shape[:2]
-        if h < 40 or w < 40:
-            return face_bgr
-        gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
-        eyes = self._eye_cascade.detectMultiScale(
-            gray, scaleFactor=1.15, minNeighbors=4,
-            minSize=(int(w * 0.08), int(h * 0.08)))
-        if eyes is not None and len(eyes) >= 2:
-            eyes = sorted(eyes, key=lambda e: e[2] * e[3], reverse=True)[:2]
-            cx1, cy1 = eyes[0][0] + eyes[0][2] // 2, eyes[0][1] + eyes[0][3] // 2
-            cx2, cy2 = eyes[1][0] + eyes[1][2] // 2, eyes[1][1] + eyes[1][3] // 2
-            dx, dy = cx2 - cx1, cy2 - cy1
-            angle = np.degrees(np.arctan2(dy, dx))
-            if abs(angle) > 2:
-                mx, my = (cx1 + cx2) / 2, (cy1 + cy2) / 2
-                M = cv2.getRotationMatrix2D((mx, my), angle, 1.0)
-                face_bgr = cv2.warpAffine(
-                    face_bgr, M, (w, h), flags=cv2.INTER_CUBIC,
-                    borderMode=cv2.BORDER_REFLECT)
-        return face_bgr
-
-    def _encode(self, face_bgr: np.ndarray) -> Optional[np.ndarray]:
-        if face_bgr.size == 0:
-            return None
-        aligned = self._align(face_bgr)
-        gray = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
-        gray = self._clahe.apply(gray)
-        gray = cv2.resize(gray, (FACE_W, FACE_H))
-        feat = self._hog.compute(gray).flatten()
-        norm = np.linalg.norm(feat)
-        return feat / norm if norm > 0 else None
 
     @property
     def known_names(self) -> list[str]:

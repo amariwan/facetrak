@@ -143,6 +143,8 @@ class MainWindow:
                 f"Face: ({cx}, {cy}) {fw}x{fh}  |  "
                 f"S:{self.eng.current_pan:.0f}/{self.eng.current_tilt:.0f}  |  "
                 f"P:{self.eng.current_yaw:.0f}/{self.eng.current_pitch:.0f}/{self.eng.current_roll:.0f}  |  "
+                f"{self.eng.metrics.emotion}  |  "
+                f"Faces:{len(self.eng.tracker.active)}  |  "
                 f"{'REC' if self.eng.recorder.recording else '   '}  |  "
                 f"K:{len(self.eng.db.known_names)} known"
             )

@@ -203,6 +203,67 @@ def get_status() -> str:
     )
 
 
+@server.tool(description="List all faces currently visible, with track ID, "
+                         "identity, dwell time and blink count")
+def get_live_faces() -> str:
+    e = _get_engine()
+    if not e.running:
+        return "Camera not running."
+    faces = e.live_faces()
+    if not faces:
+        return "No faces in view."
+    lines = []
+    for f in faces:
+        lines.append(
+            f"  #{f['id']} {f['name']} (sim {f['similarity']}) — "
+            f"in view {f['dwell_s']}s, {f['blinks']} blinks, bbox {f['bbox']}")
+    return f"{len(faces)} face(s) in view:\n" + "\n".join(lines)
+
+
+@server.tool(description="Get expression/pose analysis of the primary face: "
+                         "emotion, smile, eye openness, attention, head pose")
+def get_face_analysis() -> str:
+    e = _get_engine()
+    if not e.running:
+        return "Camera not running."
+    m = e.metrics
+    return (
+        f"Emotion: {m.emotion}\n"
+        f"Smile: {m.smile:.2f}\n"
+        f"Mouth open: {m.mouth_open:.2f}\n"
+        f"Brow raise: {m.brow_raise:.2f}\n"
+        f"Eyes open (L/R): {m.eye_left:.2f}/{m.eye_right:.2f}\n"
+        f"Attentive (facing camera): {'yes' if m.attentive else 'no'}\n"
+        f"Head pose: yaw={m.yaw:.1f} pitch={m.pitch:.1f} roll={m.roll:.1f}"
+    )
+
+
+@server.tool(description="Show the presence history (who appeared/left, "
+                         "when, and for how long)")
+def presence_history(limit: int = 30) -> str:
+    from facetrak.events import PresenceLog
+    events = PresenceLog.tail(limit)
+    if not events:
+        return "No presence events recorded yet."
+    lines = []
+    for ev in events:
+        if ev.get("event") == "left":
+            lines.append(f"  {ev['ts']}  {ev['name']} left "
+                         f"after {ev.get('duration_s', '?')}s")
+        else:
+            lines.append(f"  {ev['ts']}  {ev['name']} appeared")
+    return "Presence history:\n" + "\n".join(lines)
+
+
+@server.tool(description="Save a snapshot of the current camera frame to disk")
+def take_snapshot() -> str:
+    e = _get_engine()
+    if not e.running:
+        return "Camera not running."
+    path = e.snapshot()
+    return f"Snapshot saved: {path}" if path else "No frame available yet."
+
+
 @server.tool(description="Start or stop video recording")
 def toggle_recording() -> str:
     e = _get_engine()

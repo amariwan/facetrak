@@ -13,7 +13,7 @@ DEFAULT_CONFIG = {
         {"name": "Built-in", "source": 0},
     ],
     "detect_width": 480,
-    "recog_threshold": 0.55,
+    "recog_threshold": 0.36,  # SFace cosine similarity
     "blur_unknown": False,
     "servo": {
         "port": "",

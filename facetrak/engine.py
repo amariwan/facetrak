@@ -1,30 +1,39 @@
+"""FaceTrak engine: detection, recognition, tracking, analysis pipeline.
+
+Per frame:
+  1. YuNet detects all faces on a downscaled frame (fast).
+  2. The IoU tracker assigns stable IDs and smooths identities.
+  3. SFace embeddings identify each tracked face (rate-limited per track).
+  4. The FaceAnalyzer extracts pose + expression for the primary face.
+  5. Servo follows the primary face; presence events are logged.
+"""
+import datetime
 import logging
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
-from mediapipe.tasks.python import vision
 
 from . import config
+from .analysis import FaceAnalyzer, FaceMetrics
+from .detection import YuNetDetector
+from .events import PresenceLog
 from .facedb import FaceDatabase
-from .servo import PanTiltController
-from .pose import HeadPoseEstimator
-from .recorder import VideoRecorder
 from .notifier import Notifier
-
-_DETECTOR_URL = ("https://storage.googleapis.com/mediapipe-models/"
-                 "face_detector/blaze_face_short_range/float16/latest/"
-                 "face_detector.task")
-_DETECTOR_PATH = Path("face_detector.task")
+from .recorder import VideoRecorder
+from .servo import PanTiltController
+from .tracker import FaceTracker, Track
 
 logger = logging.getLogger(__name__)
 
-_MAX_SAMPLES = 20          # cap while capturing registration samples
-_SAMPLE_SIZE = 128         # px, square crop stored per sample
-_MIN_SHARPNESS = 30.0      # Laplacian variance below this = too blurry
-_BRIGHTNESS_RANGE = (40, 220)
-_MIN_REGISTER_SAMPLES = 2
+_MAX_SAMPLES = 20            # embeddings collected per registration
+_MIN_REGISTER_SAMPLES = 3
+_EMBED_EVERY_N_FRAMES = 5    # re-identify a named track this often
+_DEFAULT_THRESHOLD = 0.36    # SFace cosine similarity
+
+_COLOR_KNOWN = (0, 255, 0)
+_COLOR_UNKNOWN = (0, 165, 255)
+_COLOR_HUD = (200, 200, 200)
 
 
 class FaceEngine:
@@ -32,51 +41,45 @@ class FaceEngine:
         self.cfg = config.load()
         self.db = FaceDatabase()
         self.servo = PanTiltController(self.cfg)
-        self.pose = HeadPoseEstimator()
+        self.analyzer = FaceAnalyzer()
         self.recorder = VideoRecorder()
         self.notifier = Notifier()
-        self.detector = None
+        self.tracker = FaceTracker()
+        self.presence = PresenceLog()
+        self.detector: YuNetDetector | None = None
         self.cap = None
         self.running = False
+
         self.blur_enabled = self.cfg.get("blur_unknown", False)
         self.servo_enabled = False
-        self.recog_threshold = self.cfg.get("recog_threshold", 0.55)
+        threshold = self.cfg.get("recog_threshold", _DEFAULT_THRESHOLD)
+        # Legacy configs carry the old HOG-scale threshold (~0.55), which
+        # would make SFace reject nearly everything — migrate it.
+        if threshold > 0.5:
+            threshold = _DEFAULT_THRESHOLD
+            self.cfg["recog_threshold"] = threshold
+        self.recog_threshold = threshold
 
-        self._frame = None
-        self._detections = []
+        self._frame: np.ndarray | None = None
         self._detect_w = self.cfg.get("detect_width", 480)
+        self._frame_count = 0
         self._samples_buffer: list[np.ndarray] = []
         self._capturing = False
 
+        self.metrics = FaceMetrics()
         self.last_face_center = (0, 0)
         self.last_face_size = (0, 0)
         self.current_pan = 90.0
         self.current_tilt = 90.0
-        self.current_yaw = 0.0
-        self.current_pitch = 0.0
-        self.current_roll = 0.0
 
         self.overlay_text = ""
-        self.status_extra = ""
         self.current_cam_idx = self.cfg.get("camera", 0)
 
-    def _ensure_detector(self):
-        if self.detector is not None:
-            return
-        if not _DETECTOR_PATH.exists():
-            import urllib.request
-            logger.info("Downloading face detector model (~100KB)...")
-            urllib.request.urlretrieve(_DETECTOR_URL, _DETECTOR_PATH)
-        opts = vision.FaceDetectorOptions(
-            base_options=mp.tasks.BaseOptions(
-                model_asset_path=str(_DETECTOR_PATH)),
-            running_mode=vision.RunningMode.IMAGE,
-            min_detection_confidence=0.5,
-        )
-        self.detector = vision.FaceDetector.create_from_options(opts)
+    # ── lifecycle ────────────────────────────────────────
 
     def _open_capture(self, source):
-        if isinstance(source, str) and ("://" in source or source.startswith("/")):
+        if isinstance(source, str) and ("://" in source
+                                        or source.startswith("/")):
             return cv2.VideoCapture(source)
         cid = int(source)
         cap = cv2.VideoCapture(cid, cv2.CAP_AVFOUNDATION)
@@ -96,14 +99,17 @@ class FaceEngine:
         w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self._ensure_detector()
+        if self.detector is None:
+            self.detector = YuNetDetector()
         self.db.load()
-        self.pose.load_model(w, h)
+        self.analyzer.load_model(w, h)
+        self.tracker.reset()
         self.running = True
         return True
 
     def switch_camera(self, cam_idx: int) -> bool:
         was_running = self.running
+        was_rec = False
         if was_running:
             was_rec = self.recorder.recording
             if was_rec:
@@ -112,15 +118,18 @@ class FaceEngine:
             self.cap = None
             self.running = False
         ok = self.start(cam_idx)
-        if ok and was_running:
-            if was_rec:
-                h, w = (int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                        int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
-                self.recorder.start(w, h)
+        if ok and was_running and was_rec:
+            w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            self.recorder.start(w, h)
         return ok
 
     def stop(self):
         self.running = False
+        for track in self.tracker.tracks:
+            self.presence.left(track.name, track.track_id,
+                               track.dwell, track.blink_count)
+        self.tracker.reset()
         if self.recorder.recording:
             self.recorder.stop()
         if self.cap:
@@ -130,130 +139,135 @@ class FaceEngine:
             self.servo.disconnect()
         config.save(self.cfg)
 
+    # ── per-frame pipeline ───────────────────────────────
+
     def step(self) -> np.ndarray | None:
         if not self.running or self.cap is None:
             return None
         ret, frame = self.cap.read()
         if not ret:
             return None
-        self._run_detection(frame)
-        face = self._handle_best_face(frame)
-        self._draw_overlay(frame, face)
+        self._frame_count += 1
+
+        small, scale = self._downscale(frame)
+        detections = self.detector.detect(small, scale=1.0 / scale)
+        active, ended = self.tracker.update(detections)
+        for track in active:
+            if not track.announced:
+                self.presence.appeared(track.name, track.track_id)
+                track.announced = True
+        self._log_ended(ended)
+        self._identify(small, active)
+
+        primary = self.tracker.largest()
+        self._update_primary(frame, primary)
+        self._draw_overlay(frame, active)
+
         self.recorder.write(frame)
         self._frame = frame
         return frame
 
-    def _run_detection(self, frame: np.ndarray):
-        if self.detector is None:
-            self._detections = []
-            return
+    def _downscale(self, frame: np.ndarray) -> tuple[np.ndarray, float]:
         h, w = frame.shape[:2]
         scale = self._detect_w / w
         small = cv2.resize(frame, (self._detect_w, int(h * scale)),
                            interpolation=cv2.INTER_LINEAR)
-        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self.detector.detect(mp_img)
-        self._detections = []
-        if result.detections:
-            for d in result.detections:
-                rect = d.bounding_box
-                scale_inv = 1.0 / scale
-                self._detections.append({
-                    "x": int(rect.origin_x * scale_inv),
-                    "y": int(rect.origin_y * scale_inv),
-                    "w": int(rect.width * scale_inv),
-                    "h": int(rect.height * scale_inv),
-                    "score": d.categories[0].score,
-                })
+        return small, scale
 
-    def _handle_best_face(self, frame: np.ndarray) -> dict | None:
-        if not self._detections:
+    def _identify(self, small: np.ndarray, tracks: list[Track]):
+        """Run recognition on tracks, rate-limited once a name is stable."""
+        for track in tracks:
+            needs_id = (track.name is None
+                        or self._frame_count % _EMBED_EVERY_N_FRAMES == 0)
+            if not needs_id:
+                continue
+            emb = self.db.embed(small, track.det.row)
+            name, sim = self.db.predict(emb, self.recog_threshold)
+            track.vote(name, sim)
+            if track.name and self.cfg.get("notifications", True):
+                self.notifier.notify(track.name)
+            if self._capturing and track.name is None and emb is not None:
+                if len(self._samples_buffer) < _MAX_SAMPLES:
+                    self._samples_buffer.append(emb)
+
+    def _log_ended(self, ended: list[Track]):
+        for track in ended:
+            self.presence.left(track.name, track.track_id,
+                               track.dwell, track.blink_count)
+
+    def _update_primary(self, frame: np.ndarray, primary: Track | None):
+        if primary is None:
             self.last_face_center = (0, 0)
             self.last_face_size = (0, 0)
-            return None
-
-        best = max(self._detections, key=lambda d: d["score"])
-        h, w = frame.shape[:2]
-        x1 = max(0, best["x"])
-        y1 = max(0, best["y"])
-        x2 = min(w, best["x"] + best["w"])
-        y2 = min(h, best["y"] + best["h"])
-        fw, fh = best["w"], best["h"]
-        cx, cy = best["x"] + fw // 2, best["y"] + fh // 2
+            return
+        cx, cy = primary.det.center
         self.last_face_center = (cx, cy)
-        self.last_face_size = (fw, fh)
+        self.last_face_size = (primary.det.w, primary.det.h)
 
+        h, w = frame.shape[:2]
         if self.servo_enabled:
             self.current_pan, self.current_tilt = self.servo.update(
                 cx - w // 2, cy - h // 2, w, h)
 
-        face_crop = frame[y1:y2, x1:x2]
-        if face_crop.size > 0:
-            name, sim = self.db.predict(face_crop, self.recog_threshold)
-            best["name"] = name
-            best["sim"] = sim
-            if name and self.cfg.get("notifications", True):
-                self.notifier.notify(name)
-
-            if self.blur_enabled and name is None:
-                k = max(1, min(fw, fh) // 6) | 1
-                frame[y1:y2, x1:x2] = cv2.GaussianBlur(face_crop, (k, k), 0)
-
-            if self._capturing and name is None:
-                self._maybe_collect_sample(face_crop)
-
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        self.current_yaw, self.current_pitch, self.current_roll = \
-            self.pose.estimate(rgb)
+        self.metrics = self.analyzer.analyze(rgb)
+        primary.update_blink(self.metrics.eyes_closed)
 
-        return best
+    # ── rendering ────────────────────────────────────────
 
-    def _draw_overlay(self, frame: np.ndarray, face: dict | None):
+    def _draw_overlay(self, frame: np.ndarray, tracks: list[Track]):
         h, w = frame.shape[:2]
-        if face:
-            x, y, fw, fh = face["x"], face["y"], face["w"], face["h"]
-            name = face.get("name")
-            color = (0, 255, 0) if name else (0, 165, 255)
-            cv2.rectangle(frame, (x, y), (x + fw, y + fh), color, 2)
-            label = "Unknown"
-            if name:
-                sim = face.get("sim", 0)
-                label = f"{name} ({sim:.2f})"
-            cv2.putText(frame, label, (x, y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
+        for track in tracks:
+            self._draw_track(frame, track, w, h)
         if self.recorder.recording:
             cv2.circle(frame, (30, 30), 10, (0, 0, 255), -1)
             cv2.putText(frame, "REC", (50, 36),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        self._draw_hud(frame, h)
 
+    def _draw_track(self, frame: np.ndarray, track: Track, w: int, h: int):
+        x, y, fw, fh = track.bbox
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(w, x + fw), min(h, y + fh)
+        known = track.name is not None
+        color = _COLOR_KNOWN if known else _COLOR_UNKNOWN
+
+        if self.blur_enabled and not known and x2 > x1 and y2 > y1:
+            k = max(1, min(fw, fh) // 6) | 1
+            frame[y1:y2, x1:x2] = cv2.GaussianBlur(
+                frame[y1:y2, x1:x2], (k, k), 0)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        label = (f"#{track.track_id} {track.name} ({track.sim:.2f})"
+                 if known else f"#{track.track_id} Unknown")
+        cv2.putText(frame, label, (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        cv2.putText(frame, f"{track.dwell:.0f}s", (x1, y2 + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+    def _draw_hud(self, frame: np.ndarray, h: int):
+        m = self.metrics
         lines = [
             f"Pan: {self.current_pan:.1f}  Tilt: {self.current_tilt:.1f}",
-            f"Yaw: {self.current_yaw:.1f}  Pitch: {self.current_pitch:.1f}  Roll: {self.current_roll:.1f}",
+            f"Yaw: {m.yaw:.1f}  Pitch: {m.pitch:.1f}  Roll: {m.roll:.1f}",
+            (f"Emotion: {m.emotion}  Smile: {m.smile:.2f}  "
+             f"Attentive: {'yes' if m.attentive else 'no'}"),
+            f"Faces: {len(self.tracker.active)}",
         ]
-        if face:
-            cx, cy = self.last_face_center
-            lines.append(f"Face: ({cx}, {cy})  {self.last_face_size[0]}x{self.last_face_size[1]}")
+        if self._capturing:
+            lines.append(f"Capturing {len(self._samples_buffer)}"
+                         f"/{_MAX_SAMPLES} samples")
         if self.overlay_text:
             lines.append(self.overlay_text)
+        y0 = h - 20 * len(lines) - 8
         for i, line in enumerate(lines):
-            cv2.putText(frame, line, (10, h - 60 + i * 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+            cv2.putText(frame, line, (10, y0 + i * 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, _COLOR_HUD, 1)
 
-    def _maybe_collect_sample(self, face_crop: np.ndarray):
-        if len(self._samples_buffer) >= _MAX_SAMPLES:
-            return
-        small = cv2.resize(face_crop, (_SAMPLE_SIZE, _SAMPLE_SIZE))
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
-        brightness = float(np.mean(gray))
-        lo, hi = _BRIGHTNESS_RANGE
-        if sharpness > _MIN_SHARPNESS and lo < brightness < hi:
-            self._samples_buffer.append(small)
+    # ── commands ─────────────────────────────────────────
 
     def capture_samples(self):
-        """Begin collecting registration samples on subsequent frames."""
+        """Begin collecting registration embeddings on subsequent frames."""
         self._samples_buffer = []
         self._capturing = True
 
@@ -262,26 +276,65 @@ class FaceEngine:
         samples, self._samples_buffer = self._samples_buffer, []
         if len(samples) < _MIN_REGISTER_SAMPLES:
             return False
-        return self.db.register(name, samples)
+        ok = self.db.register(name, samples)
+        if ok:
+            # Re-identify everyone now that the database changed.
+            for track in self.tracker.tracks:
+                track.name = None
+        return ok
+
+    def snapshot(self) -> str | None:
+        if self._frame is None:
+            return None
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = f"snapshot_{ts}.png"
+        cv2.imwrite(path, self._frame)
+        return str(Path(path).resolve())
+
+    def live_faces(self) -> list[dict]:
+        """Structured view of all currently tracked faces (for MCP/UI)."""
+        return [
+            {
+                "id": t.track_id,
+                "name": t.name or "unknown",
+                "similarity": round(t.sim, 3),
+                "bbox": t.bbox,
+                "dwell_s": round(t.dwell, 1),
+                "blinks": t.blink_count,
+            }
+            for t in self.tracker.active
+        ]
 
     def toggle_record(self):
         if self.recorder.recording:
             self.recorder.stop()
-        else:
-            if self._frame is not None:
-                h, w = self._frame.shape[:2]
-                self.recorder.start(w, h)
+        elif self._frame is not None:
+            h, w = self._frame.shape[:2]
+            self.recorder.start(w, h)
 
-    def toggle_blur(self):
+    def toggle_blur(self) -> bool:
         self.blur_enabled = not self.blur_enabled
         self.cfg["blur_unknown"] = self.blur_enabled
         config.save(self.cfg)
         return self.blur_enabled
 
-    def toggle_servo(self):
+    def toggle_servo(self) -> bool:
         self.servo_enabled = not self.servo_enabled
         self.servo.enabled = self.servo_enabled
         return self.servo_enabled
 
     def set_overlay(self, text: str):
         self.overlay_text = text
+
+    # Backwards-compatible pose accessors (used by UI/MCP status lines).
+    @property
+    def current_yaw(self) -> float:
+        return self.metrics.yaw
+
+    @property
+    def current_pitch(self) -> float:
+        return self.metrics.pitch
+
+    @property
+    def current_roll(self) -> float:
+        return self.metrics.roll
