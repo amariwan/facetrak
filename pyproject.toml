@@ -21,3 +21,6 @@ include = ["facetrak*"]
 
 [tool.jupyter]
 allowed = false
+
+[tool.uv]
+package = true

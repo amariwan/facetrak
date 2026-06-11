@@ -58,8 +58,7 @@ clean:
     @echo "Cleaned"
 
 update:
-    {{pip}} install --upgrade facetrak
-
+    uv sync --upgrade --all-extras
 
 # Show help
 default:
