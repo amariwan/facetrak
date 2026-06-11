@@ -65,23 +65,36 @@ class PanTiltController:
         if self.invert_tilt:
             to = -to
 
-        self.pan_target = np.clip(90 + po, self.pan_min, self.pan_max)
-        self.tilt_target = np.clip(90 + to, self.tilt_min, self.tilt_max)
+        self.pan_target = float(np.clip(90 + po, self.pan_min, self.pan_max))
+        self.tilt_target = float(np.clip(90 + to, self.tilt_min, self.tilt_max))
 
-        dp = np.clip(self.pan_target - self.pan, -self.max_step, self.max_step)
-        dt = np.clip(self.tilt_target - self.tilt, -self.max_step, self.max_step)
-        self.pan += dp * self.smooth + dp * (1 - self.smooth)
-        self.tilt += dt * self.smooth + dt * (1 - self.smooth)
-        self.pan = np.clip(self.pan, self.pan_min, self.pan_max)
-        self.tilt = np.clip(self.tilt, self.tilt_min, self.tilt_max)
+        self.pan += float(np.clip((self.pan_target - self.pan) * self.smooth,
+                                  -self.max_step, self.max_step))
+        self.tilt += float(np.clip((self.tilt_target - self.tilt) * self.smooth,
+                                   -self.max_step, self.max_step))
+        self.pan = float(np.clip(self.pan, self.pan_min, self.pan_max))
+        self.tilt = float(np.clip(self.tilt, self.tilt_min, self.tilt_max))
 
-        if self.connected:
-            try:
-                self.ser.write(
-                    f"P{int(self.pan):03d}T{int(self.tilt):03d}\n".encode())
-            except Exception:
-                pass
+        self._send()
         return self.pan, self.tilt
+
+    def move_to(self, pan: float, tilt: float) -> tuple[float, float]:
+        """Jump directly to absolute angles, bypassing smoothing."""
+        self.pan = float(np.clip(pan, self.pan_min, self.pan_max))
+        self.tilt = float(np.clip(tilt, self.tilt_min, self.tilt_max))
+        self.pan_target = self.pan
+        self.tilt_target = self.tilt
+        self._send()
+        return self.pan, self.tilt
+
+    def _send(self):
+        if not self.connected:
+            return
+        try:
+            self.ser.write(
+                f"P{int(self.pan):03d}T{int(self.tilt):03d}\n".encode())
+        except (serial.SerialException, OSError):
+            self.disconnect()
 
     @staticmethod
     def list_ports() -> list[str]:

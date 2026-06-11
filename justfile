@@ -7,15 +7,15 @@ pip := venv / "bin" / "pip"
 
 # Run the tracker app
 run:
-    {{python}} -m facescan
+    {{python}} -m facetrak
 
 # Start MCP server for LLM integration (stdio)
 mcp-serve:
-    {{python}} -m facescan.mcp_server
+    {{python}} -m facetrak.mcp_server
 
 # Standalone pan-tilt simulation (no camera needed)
 sim:
-    {{python}} -c "from facescan.simulation import demo; demo()"
+    {{python}} -c "from facetrak.simulation import demo; demo()"
 
 # Install project + dev deps
 setup:

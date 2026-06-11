@@ -1,8 +1,11 @@
-import cv2
-import numpy as np
-import mediapipe as mp
-from mediapipe.tasks.python import vision
+import logging
 from pathlib import Path
+
+import cv2
+import mediapipe as mp
+import numpy as np
+from mediapipe.tasks.python import vision
+
 from . import config
 from .facedb import FaceDatabase
 from .servo import PanTiltController
@@ -15,7 +18,13 @@ _DETECTOR_URL = ("https://storage.googleapis.com/mediapipe-models/"
                  "face_detector.task")
 _DETECTOR_PATH = Path("face_detector.task")
 
-_SAMPLE_COUNT = 5
+logger = logging.getLogger(__name__)
+
+_MAX_SAMPLES = 20          # cap while capturing registration samples
+_SAMPLE_SIZE = 128         # px, square crop stored per sample
+_MIN_SHARPNESS = 30.0      # Laplacian variance below this = too blurry
+_BRIGHTNESS_RANGE = (40, 220)
+_MIN_REGISTER_SAMPLES = 2
 
 
 class FaceEngine:
@@ -36,7 +45,8 @@ class FaceEngine:
         self._frame = None
         self._detections = []
         self._detect_w = self.cfg.get("detect_width", 480)
-        self._samples_buffer = []
+        self._samples_buffer: list[np.ndarray] = []
+        self._capturing = False
 
         self.last_face_center = (0, 0)
         self.last_face_size = (0, 0)
@@ -55,7 +65,7 @@ class FaceEngine:
             return
         if not _DETECTOR_PATH.exists():
             import urllib.request
-            print("[Engine] downloading face detector (~100KB)...")
+            logger.info("Downloading face detector model (~100KB)...")
             urllib.request.urlretrieve(_DETECTOR_URL, _DETECTOR_PATH)
         opts = vision.FaceDetectorOptions(
             base_options=mp.tasks.BaseOptions(
@@ -164,18 +174,21 @@ class FaceEngine:
             return None
 
         best = max(self._detections, key=lambda d: d["score"])
-        x, y, fw, fh = best["x"], best["y"], best["w"], best["h"]
-        cx, cy = x + fw // 2, y + fh // 2
+        h, w = frame.shape[:2]
+        x1 = max(0, best["x"])
+        y1 = max(0, best["y"])
+        x2 = min(w, best["x"] + best["w"])
+        y2 = min(h, best["y"] + best["h"])
+        fw, fh = best["w"], best["h"]
+        cx, cy = best["x"] + fw // 2, best["y"] + fh // 2
         self.last_face_center = (cx, cy)
         self.last_face_size = (fw, fh)
 
         if self.servo_enabled:
-            h, w = frame.shape[:2]
             self.current_pan, self.current_tilt = self.servo.update(
                 cx - w // 2, cy - h // 2, w, h)
 
-        face_crop = frame[max(0, y):y + fh, max(0, x):x + fw]
-        name = None
+        face_crop = frame[y1:y2, x1:x2]
         if face_crop.size > 0:
             name, sim = self.db.predict(face_crop, self.recog_threshold)
             best["name"] = name
@@ -185,16 +198,10 @@ class FaceEngine:
 
             if self.blur_enabled and name is None:
                 k = max(1, min(fw, fh) // 6) | 1
-                frame[y:y + fh, x:x + fw] = cv2.GaussianBlur(
-                    frame[y:y + fh, x:x + fw], (k, k), 0)
+                frame[y1:y2, x1:x2] = cv2.GaussianBlur(face_crop, (k, k), 0)
 
-            if self._samples_buffer is not None and name is None and face_crop.size > 0:
-                small = cv2.resize(face_crop, (128, 128))
-                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-                sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
-                brightness = np.mean(gray)
-                if sharpness > 30 and 40 < brightness < 220:
-                    self._samples_buffer.append(small)
+            if self._capturing and name is None:
+                self._maybe_collect_sample(face_crop)
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         self.current_yaw, self.current_pitch, self.current_roll = \
@@ -234,16 +241,28 @@ class FaceEngine:
             cv2.putText(frame, line, (10, h - 60 + i * 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
 
-    def capture_samples(self) -> list[np.ndarray]:
-        self._samples_buffer = []
-        return self._samples_buffer
+    def _maybe_collect_sample(self, face_crop: np.ndarray):
+        if len(self._samples_buffer) >= _MAX_SAMPLES:
+            return
+        small = cv2.resize(face_crop, (_SAMPLE_SIZE, _SAMPLE_SIZE))
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+        brightness = float(np.mean(gray))
+        lo, hi = _BRIGHTNESS_RANGE
+        if sharpness > _MIN_SHARPNESS and lo < brightness < hi:
+            self._samples_buffer.append(small)
 
-    def register(self, name: str):
-        if not self._samples_buffer or len(self._samples_buffer) < 2:
-            return False
-        self.db.register(name, self._samples_buffer)
+    def capture_samples(self):
+        """Begin collecting registration samples on subsequent frames."""
         self._samples_buffer = []
-        return True
+        self._capturing = True
+
+    def register(self, name: str) -> bool:
+        self._capturing = False
+        samples, self._samples_buffer = self._samples_buffer, []
+        if len(samples) < _MIN_REGISTER_SAMPLES:
+            return False
+        return self.db.register(name, samples)
 
     def toggle_record(self):
         if self.recorder.recording:

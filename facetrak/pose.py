@@ -1,8 +1,12 @@
+import logging
+from pathlib import Path
+
 import cv2
 import mediapipe as mp
-from mediapipe.tasks.python import vision
 import numpy as np
-from pathlib import Path
+from mediapipe.tasks.python import vision
+
+logger = logging.getLogger(__name__)
 
 _MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/"
               "face_landmarker/face_landmarker/float16/latest/"
@@ -50,12 +54,14 @@ class HeadPoseEstimator:
                 [0, 0, 1],
             ], dtype=np.float64)
         except Exception:
+            logger.warning("Head pose model unavailable, pose disabled",
+                           exc_info=True)
             self.ready = False
 
     @staticmethod
     def _download():
         import urllib.request
-        print("[Pose] downloading model (~5MB)...")
+        logger.info("Downloading face landmarker model (~5MB)...")
         urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
 
     def estimate(self, rgb_frame: np.ndarray) -> tuple[float, float, float]:
@@ -80,5 +86,5 @@ class HeadPoseEstimator:
                 self.pitch = np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2]))
                 self.roll = np.degrees(np.arctan2(rmat[1, 0], rmat[0, 0]))
             return self.yaw, self.pitch, self.roll
-        except Exception:
+        except (cv2.error, ValueError):
             return 0.0, 0.0, 0.0

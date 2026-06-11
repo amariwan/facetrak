@@ -62,17 +62,21 @@ def forget_person(name: str) -> str:
 @server.tool(description="Register a new person from camera. Name is required.")
 def register_person(name: str) -> str:
     e = _get_engine()
-    if not e.running:
-        running = e.start()
-        if not running:
+    started_here = not e.running
+    if started_here:
+        if not e.start():
             return "Cannot start camera."
         time.sleep(1)
     e.capture_samples()
     e.set_overlay(f"Registering {name}...")
-    time.sleep(3)
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        if started_here:
+            e.step()  # no UI poll loop is running for us
+        time.sleep(0.03)
     ok = e.register(name)
     e.set_overlay("")
-    if not e.running:
+    if started_here:
         e.stop()
     if ok:
         return f"Registered '{name}' successfully."
@@ -297,11 +301,9 @@ def servo_disconnect() -> str:
 @server.tool(description="Enable or disable servo tracking")
 def servo_set_enabled(enabled: bool) -> str:
     e = _get_engine()
-    if enabled:
-        e.toggle_servo()
-        return "Servo tracking enabled."
-    e.toggle_servo()
-    return "Servo tracking disabled."
+    e.servo_enabled = enabled
+    e.servo.enabled = enabled
+    return f"Servo tracking {'enabled' if enabled else 'disabled'}."
 
 
 @server.tool(description="Directly set pan/tilt angles (0-180)")
@@ -309,14 +311,8 @@ def servo_set_angle(pan: int, tilt: int) -> str:
     e = _get_engine()
     if not e.servo.connected:
         return "Servo not connected."
-    cfg = config.load()
-    s = cfg["servo"]
-    pan = max(s["pan_min"], min(s["pan_max"], pan))
-    tilt = max(s["tilt_min"], min(s["tilt_max"], tilt))
-    e.servo.pan = float(pan)
-    e.servo.tilt = float(tilt)
-    e.servo.update(0, 0, 640, 480)
-    return f"Pan: {pan}, Tilt: {tilt}"
+    actual_pan, actual_tilt = e.servo.move_to(float(pan), float(tilt))
+    return f"Pan: {actual_pan:.0f}, Tilt: {actual_tilt:.0f}"
 
 
 def run():

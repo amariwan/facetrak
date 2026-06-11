@@ -32,14 +32,16 @@ class FaceDatabase:
             self.names.append(name)
             self.encodings.append(data)
 
-    def register(self, name: str, samples: list[np.ndarray]):
-        feats = [self._encode(s) for s in samples if s.size > 0]
-        feats = [f for f in feats if f is not None]
-        if not feats or len(feats) < _MIN_SAMPLES:
-            return
+    def register(self, name: str, samples: list[np.ndarray]) -> bool:
+        feats = [f for f in (self._encode(s) for s in samples if s.size > 0)
+                 if f is not None]
+        if len(feats) < _MIN_SAMPLES:
+            return False
         matrix = np.stack(feats, axis=0)
+        FACE_DIR.mkdir(parents=True, exist_ok=True)
         np.save(str(FACE_DIR / f"{name.replace(' ', '_')}.npy"), matrix)
         self.load()
+        return True
 
     def predict(self, face_bgr: np.ndarray, threshold: float = 0.50
                 ) -> tuple[Optional[str], float]:

@@ -11,13 +11,15 @@ class Notifier:
             return
         self._notified.add(name)
         ts = datetime.datetime.now().strftime("%H:%M:%S")
+        # Escape for the AppleScript string literal — name is user-supplied.
+        safe = name.replace("\\", "\\\\").replace('"', '\\"')
         try:
             subprocess.run([
                 "osascript", "-e",
-                f'display notification "{name} detected at {ts}" '
+                f'display notification "{safe} detected at {ts}" '
                 f'with title "FaceTrak" sound name "Tink"'
-            ], timeout=2, capture_output=True)
-        except Exception:
+            ], timeout=2, capture_output=True, check=False)
+        except (OSError, subprocess.SubprocessError):
             pass
 
     def reset(self):

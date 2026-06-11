@@ -88,11 +88,9 @@ class MainWindow:
             config.save(cfg)
             self.eng.current_cam_idx = idx
             return
-        was_rec = self.eng.recorder.recording
-        ok = self.eng.switch_camera(idx)
-        if not ok:
-            self.eng.start(cfg.get("camera", 0))
-            messagebox.showerror("Error", f"Failed to switch camera.")
+        if not self.eng.switch_camera(idx):
+            messagebox.showerror("Error", "Failed to switch camera.")
+            self._populate_cameras()
 
     def _toggle_start(self):
         if self.eng.running:

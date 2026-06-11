@@ -1,5 +1,9 @@
+import copy
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path("config.json")
 
@@ -28,13 +32,14 @@ def load() -> dict:
             with open(CONFIG_PATH) as f:
                 cfg = json.load(f)
             for k, v in DEFAULT_CONFIG.items():
-                cfg.setdefault(k, v)
-            save(cfg)
+                cfg.setdefault(k, copy.deepcopy(v))
             return cfg
-        except Exception:
-            pass
-    save(DEFAULT_CONFIG)
-    return dict(DEFAULT_CONFIG)
+        except (json.JSONDecodeError, OSError):
+            logger.warning("Could not read %s, falling back to defaults",
+                           CONFIG_PATH, exc_info=True)
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    save(cfg)
+    return cfg
 
 
 def save(cfg: dict):
