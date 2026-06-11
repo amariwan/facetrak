@@ -1,0 +1,23 @@
+[project]
+name = "facetrak"
+version = "0.2.0"
+description = "Real-time face detection, recognition and tracking with OpenCV and MediaPipe"
+requires-python = ">=3.11"
+dependencies = [
+    "opencv-contrib-python>=4.13",
+    "mediapipe>=0.10",
+    "numpy>=2",
+    "pillow>=12",
+    "pyserial>=3.5",
+    "mcp>=1.27",
+]
+
+[project.scripts]
+facetrak = "facetrak.__main__:main"
+facetrak-mcp = "facetrak.mcp_server:run"
+
+[tool.setuptools.packages.find]
+include = ["facetrak*"]
+
+[tool.jupyter]
+allowed = false

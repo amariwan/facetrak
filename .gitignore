@@ -1,0 +1,10 @@
+__pycache__/
+.mypy_cache/
+*.egg-info/
+.venv/
+faces/data/*.npy
+face_detector.task
+face_landmarker.task
+snap_*.png
+recording_*.mp4
+config.json
