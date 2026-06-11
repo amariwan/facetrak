@@ -8,6 +8,7 @@ Results are cached per Track for _CACHE_FRAMES frames to avoid re-running
 inference on every frame.
 """
 import logging
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -19,8 +20,16 @@ logger = logging.getLogger(__name__)
 _BASE = "https://raw.githubusercontent.com/spmallick/learnopencv/master/AgeGender"
 _AGE_PROTO_URL    = f"{_BASE}/age_deploy.prototxt"
 _GENDER_PROTO_URL = f"{_BASE}/gender_deploy.prototxt"
-_AGE_MODEL_URL    = "https://storage.googleapis.com/learnopencv2/age_net.caffemodel"
-_GENDER_MODEL_URL = "https://storage.googleapis.com/learnopencv2/gender_net.caffemodel"
+
+# caffemodel mirrors — tried in order; first success wins
+_AGE_MODEL_URLS = [
+    "https://github.com/smahesh29/Gender-and-Age-Detection/raw/master/age_net.caffemodel",
+    "https://storage.googleapis.com/learnopencv2/age_net.caffemodel",
+]
+_GENDER_MODEL_URLS = [
+    "https://github.com/smahesh29/Gender-and-Age-Detection/raw/master/gender_net.caffemodel",
+    "https://storage.googleapis.com/learnopencv2/gender_net.caffemodel",
+]
 
 _AGE_PROTO    = Path("age_deploy.prototxt")
 _AGE_MODEL    = Path("age_net.caffemodel")
@@ -30,6 +39,24 @@ _GENDER_MODEL = Path("gender_net.caffemodel")
 _AGE_BUCKETS = ["0-2", "4-6", "8-12", "15-20", "25-32", "38-43", "48-53", "60+"]
 _GENDERS     = ["Male", "Female"]
 _MEAN        = (78.4263377603, 87.7689143744, 114.895847746)
+
+
+def _fetch(path: Path, urls: list[str]) -> bool:
+    """Try each URL in order; return True if the file was obtained."""
+    if path.exists():
+        return True
+    for url in urls:
+        try:
+            logger.info("Downloading %s …", path.name)
+            tmp = path.with_suffix(".part")
+            urllib.request.urlretrieve(url, tmp)
+            tmp.rename(path)
+            return True
+        except (urllib.error.URLError, OSError) as exc:
+            logger.debug("  mirror failed (%s): %s", url, exc)
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+    return False
 
 
 class AgeGenderEstimator:
@@ -43,28 +70,28 @@ class AgeGenderEstimator:
         if self._disabled:
             return
         try:
-            self._download_all()
+            if not self._download_all():
+                logger.warning(
+                    "Age/gender models unavailable (download failed from all "
+                    "mirrors). Feature disabled. To enable, manually place "
+                    "age_net.caffemodel and gender_net.caffemodel in the "
+                    "project directory.")
+                self._disabled = True
+                return
             self._age_net    = cv2.dnn.readNet(str(_AGE_PROTO),    str(_AGE_MODEL))
             self._gender_net = cv2.dnn.readNet(str(_GENDER_PROTO), str(_GENDER_MODEL))
             self._ready = True
             logger.info("Age/gender estimator ready")
-        except Exception:
-            logger.warning("Age/gender unavailable — feature disabled",
-                           exc_info=True)
+        except Exception as exc:
+            logger.warning("Age/gender unavailable — feature disabled: %s", exc)
             self._disabled = True
 
-    def _download_all(self):
-        pairs = [
-            (_AGE_PROTO,    _AGE_PROTO_URL),
-            (_AGE_MODEL,    _AGE_MODEL_URL),
-            (_GENDER_PROTO, _GENDER_PROTO_URL),
-            (_GENDER_MODEL, _GENDER_MODEL_URL),
-        ]
-        for path, url in pairs:
-            if path.exists():
-                continue
-            logger.info("Downloading %s …", path.name)
-            urllib.request.urlretrieve(url, path)
+    def _download_all(self) -> bool:
+        ok  = _fetch(_AGE_PROTO,    [_AGE_PROTO_URL])
+        ok &= _fetch(_AGE_MODEL,    _AGE_MODEL_URLS)
+        ok &= _fetch(_GENDER_PROTO, [_GENDER_PROTO_URL])
+        ok &= _fetch(_GENDER_MODEL, _GENDER_MODEL_URLS)
+        return ok
 
     def predict(self, face_bgr: np.ndarray) -> tuple[str, str]:
         """Return (age_range, gender) or ("?", "?") on failure/disabled."""

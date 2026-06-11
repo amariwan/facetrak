@@ -14,6 +14,18 @@ dependencies = [
     "uvicorn>=0.30",
 ]
 
+[project.optional-dependencies]
+# Raspberry Pi Camera Module (libcamera-based)
+pi = ["picamera2>=0.3"]
+# ONVIF PTZ IP cameras
+onvif = ["onvif-zeep>=0.2.12"]
+# YOLO object detection
+yolo = ["ultralytics>=8.0"]
+# All optional hardware support
+hardware = ["picamera2>=0.3", "onvif-zeep>=0.2.12"]
+# Full AI suite
+ai = ["ultralytics>=8.0"]
+
 [project.scripts]
 facetrak = "facetrak.__main__:main"
 facetrak-mcp = "facetrak.mcp_server:run"

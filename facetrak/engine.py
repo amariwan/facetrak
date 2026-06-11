@@ -19,7 +19,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import config, db
+from . import camera, config, db
+from .camera import CameraSource, DigitalZoom, from_config as cameras_from_config
+from .ai import ObjectDetector, PoseEstimator, GestureDetector
+from .sensors import AudioMonitor, AudioEvent, PIRSensor, DepthEstimator
 from .age_gender import AgeGenderEstimator
 from .analysis import FaceAnalyzer, FaceMetrics
 from .crowd import CrowdMonitor
@@ -71,8 +74,28 @@ class FaceEngine:
         self.timeline    = EmotionTimeline()
         self.liveness    = LivenessChecker()
 
+        self.object_detector = ObjectDetector()
+        self.pose_estimator  = PoseEstimator()
+        self.gesture_detector = GestureDetector()
+
+        self.objects_enabled  = self.cfg.get("objects_enabled", False)
+        self.pose_enabled     = self.cfg.get("pose_enabled", False)
+        self.gestures_enabled = self.cfg.get("gestures_enabled", False)
+
+        self.audio_monitor = AudioMonitor()
+        self.pir_sensor    = PIRSensor(pin=self.cfg.get("pir_gpio_pin", 17))
+        self.depth_estimator = DepthEstimator()
+
+        self.audio_enabled = self.cfg.get("audio_enabled", False)
+        self.pir_enabled   = self.cfg.get("pir_enabled", False)
+        self.depth_enabled = self.cfg.get("depth_enabled", False)
+
+        self.last_audio_events: list = []
+        self.last_motion: bool = False
+
         self.detector: YuNetDetector | None = None
-        self.cap   = None
+        self.cam: CameraSource | None = None
+        self.cameras: list[CameraSource] = []
         self.running = False
 
         self.blur_enabled    = self.cfg.get("blur_unknown", False)
@@ -105,33 +128,46 @@ class FaceEngine:
 
     # ── lifecycle ────────────────────────────────────────
 
-    def _open_capture(self, source):
-        if isinstance(source, str) and ("://" in source or source.startswith("/")):
-            return cv2.VideoCapture(source)
-        cid = int(source)
-        cap = cv2.VideoCapture(cid, cv2.CAP_AVFOUNDATION)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(cid)
-        return cap
-
     def start(self, cam_idx: int | None = None) -> bool:
         if cam_idx is not None:
             self.current_cam_idx = cam_idx
             self.cfg["camera"] = cam_idx
             config.save(self.cfg)
-        src = config.source(self.cfg, self.current_cam_idx)
-        self.cap = self._open_capture(src)
-        if not self.cap or not self.cap.isOpened():
+
+        try:
+            self.cameras = cameras_from_config(self.cfg)
+        except Exception as exc:
+            logger.error("Failed to open cameras: %s", exc)
             return False
-        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        # primary camera is the first in the list (or the one matching cam_idx)
+        idx = min(self.current_cam_idx, len(self.cameras) - 1)
+        self.cam = self.cameras[idx]
+
+        ok, probe = self.cam.read()
+        if not ok or probe is None:
+            logger.error("Primary camera did not return a frame")
+            return False
+
+        w, h = self.cam.resolution
         if self.detector is None:
             self.detector = YuNetDetector()
         self.db.load()
         self.analyzer.load_model(w, h)
         self.age_gender.load()
         self.tracker.reset()
+        if self.objects_enabled:
+            self.object_detector.load()
+        if self.pose_enabled:
+            self.pose_estimator.load()
+        if self.gestures_enabled:
+            self.gesture_detector.load()
+        if self.audio_enabled:
+            self.audio_monitor.start()
+        if self.pir_enabled:
+            self.pir_sensor.start()
+        if self.depth_enabled:
+            self.depth_estimator.load()
         self.running = True
         return True
 
@@ -141,13 +177,14 @@ class FaceEngine:
             was_rec = self.recorder.recording
             if was_rec:
                 self.recorder.stop()
-            self.cap.release()
-            self.cap = None
+            for c in self.cameras:
+                c.release()
+            self.cameras = []
+            self.cam = None
             self.running = False
         ok = self.start(cam_idx)
         if ok and was_rec:
-            w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            w, h = self.cam.resolution
             self.recorder.start(w, h)
         return ok
 
@@ -158,9 +195,14 @@ class FaceEngine:
         self.tracker.reset()
         if self.recorder.recording:
             self.recorder.stop()
-        if self.cap:
-            self.cap.release()
-            self.cap = None
+        for c in self.cameras:
+            c.release()
+        self.cameras = []
+        self.cam = None
+        self.pose_estimator.release()
+        self.gesture_detector.release()
+        self.audio_monitor.stop()
+        self.pir_sensor.stop()
         if self.servo.connected:
             self.servo.disconnect()
         config.save(self.cfg)
@@ -168,9 +210,9 @@ class FaceEngine:
     # ── per-frame pipeline ───────────────────────────────
 
     def step(self) -> np.ndarray | None:
-        if not self.running or self.cap is None:
+        if not self.running or self.cam is None:
             return None
-        ret, frame = self.cap.read()
+        ret, frame = self.cam.read()
         if not ret:
             return None
         self._frame_no += 1
@@ -204,6 +246,42 @@ class FaceEngine:
                 self.metrics.attentive, self.metrics.yaw, self.metrics.pitch)
 
         self._draw_overlay(frame, active)
+
+        # sensor fusion
+        if self.audio_enabled and self.audio_monitor.enabled:
+            self.last_audio_events = self.audio_monitor.poll_all()
+            for ev in self.last_audio_events:
+                logger.debug("AudioEvent: %s @ %.1f dBFS", ev.event, ev.rms_db)
+
+        if self.pir_enabled and self.pir_sensor.enabled:
+            motion_events = self.pir_sensor.poll_all()
+            if motion_events:
+                self.last_motion = motion_events[-1].active
+
+        depth_map = None
+        if self.depth_enabled and self.depth_estimator.enabled:
+            depth_map = self.depth_estimator.estimate(frame)
+            if depth_map is not None:
+                self.depth_estimator.draw_overlay(frame, depth_map)
+                face_bboxes = [(t.det.x, t.det.y, t.det.w, t.det.h) for t in active]
+                self.depth_estimator.draw_face_distances(frame, depth_map, face_bboxes)
+
+        # optional AI modules
+        if self.objects_enabled and self.object_detector.enabled:
+            objects = self.object_detector.detect(frame)
+            self.object_detector.draw(frame, objects)
+
+        if self.pose_enabled or self.gestures_enabled:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if self.pose_enabled and self.pose_estimator.enabled:
+                pose = self.pose_estimator.process(rgb)
+                if pose:
+                    self.pose_estimator.draw(frame, pose)
+            if self.gestures_enabled and self.gesture_detector.enabled:
+                hands = self.gesture_detector.process(rgb)
+                if hands:
+                    self.gesture_detector.draw(frame, hands)
+
         self.recorder.write(frame)
         self._frame = frame
         return frame
@@ -399,9 +477,9 @@ class FaceEngine:
     def toggle_record(self):
         if self.recorder.recording:
             self.recorder.stop()
-        elif self._frame is not None:
-            hw = self._frame.shape
-            self.recorder.start(hw[1], hw[0])
+        elif self._frame is not None and self.cam is not None:
+            w, h = self.cam.resolution
+            self.recorder.start(w, h)
 
     def toggle_blur(self) -> bool:
         self.blur_enabled = not self.blur_enabled
@@ -439,6 +517,58 @@ class FaceEngine:
 
     def set_overlay(self, text: str):
         self.overlay_text = text
+
+    def toggle_objects(self) -> bool:
+        self.objects_enabled = not self.objects_enabled
+        if self.objects_enabled and not self.object_detector.enabled:
+            self.object_detector.load()
+        self.cfg["objects_enabled"] = self.objects_enabled
+        config.save(self.cfg)
+        return self.objects_enabled
+
+    def toggle_pose(self) -> bool:
+        self.pose_enabled = not self.pose_enabled
+        if self.pose_enabled and not self.pose_estimator.enabled:
+            self.pose_estimator.load()
+        self.cfg["pose_enabled"] = self.pose_enabled
+        config.save(self.cfg)
+        return self.pose_enabled
+
+    def toggle_audio(self) -> bool:
+        self.audio_enabled = not self.audio_enabled
+        if self.audio_enabled and not self.audio_monitor.enabled:
+            self.audio_monitor.start()
+        elif not self.audio_enabled:
+            self.audio_monitor.stop()
+        self.cfg["audio_enabled"] = self.audio_enabled
+        config.save(self.cfg)
+        return self.audio_enabled
+
+    def toggle_pir(self) -> bool:
+        self.pir_enabled = not self.pir_enabled
+        if self.pir_enabled and not self.pir_sensor.enabled:
+            self.pir_sensor.start()
+        elif not self.pir_enabled:
+            self.pir_sensor.stop()
+        self.cfg["pir_enabled"] = self.pir_enabled
+        config.save(self.cfg)
+        return self.pir_enabled
+
+    def toggle_depth(self) -> bool:
+        self.depth_enabled = not self.depth_enabled
+        if self.depth_enabled and not self.depth_estimator.enabled:
+            self.depth_estimator.load()
+        self.cfg["depth_enabled"] = self.depth_enabled
+        config.save(self.cfg)
+        return self.depth_enabled
+
+    def toggle_gestures(self) -> bool:
+        self.gestures_enabled = not self.gestures_enabled
+        if self.gestures_enabled and not self.gesture_detector.enabled:
+            self.gesture_detector.load()
+        self.cfg["gestures_enabled"] = self.gestures_enabled
+        config.save(self.cfg)
+        return self.gestures_enabled
 
     def export_crowd_csv(self) -> str:
         return self.crowd.export_csv()
