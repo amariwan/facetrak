@@ -1,153 +1,233 @@
 import tkinter as tk
 import math
+import time
 
+class Colors:
+    """Catppuccin Macchiato inspired palette for a modern, clean UI."""
+    BG = "#1e1e2e"
+    SURFACE = "#313244"
+    OVERLAY = "#45475a"
+    TEXT = "#cdd6f4"
+    SUBTEXT = "#a6adc8"
+    PAN_ACCENT = "#fab387"   # Peach
+    TILT_ACCENT = "#89b4fa"  # Blue
+    LENS = "#a6e3a1"         # Green
+    WIRE = "#585b70"
+
+class Vector3:
+    """Simple 3D Vector math for our UI projections."""
+    @staticmethod
+    def rotate_x(x, y, z, angle_deg):
+        """Tilt: Rotation around local X-axis"""
+        rad = math.radians(angle_deg)
+        c, s = math.cos(rad), math.sin(rad)
+        return x, y * c - z * s, y * s + z * c
+
+    @staticmethod
+    def rotate_y(x, y, z, angle_deg):
+        """Pan: Rotation around global Y-axis"""
+        rad = math.radians(angle_deg)
+        c, s = math.cos(rad), math.sin(rad)
+        return x * c + z * s, y, -x * s + z * c
 
 class SimulationWindow:
-    def __init__(self, root: tk.Tk, get_angles):
+    def __init__(self, root: tk.Tk, get_angles_callback):
         self.win = tk.Toplevel(root)
-        self.win.title("Pan-Tilt Simulation")
-        self.win.geometry("380x420")
+        self.win.title("Pan-Tilt 3D Simulation")
+        self.win.geometry("450x500")
+        self.win.configure(bg=Colors.BG)
         self.win.resizable(False, False)
 
-        self.get_angles = get_angles
-        self.cvs = tk.Canvas(self.win, width=360, height=360, bg="#1e1e2e",
-                             highlightthickness=0)
-        self.cvs.pack(pady=(10, 0))
+        self.get_angles = get_angles_callback
 
-        self.l_info = tk.Label(self.win, font=("Consolas", 11),
-                               fg="#cdd6f4", bg="#1e1e2e")
-        self.l_info.pack(fill=tk.X, padx=10, pady=(4, 10))
+        # Canvas takes full window, no borders
+        self.cvs = tk.Canvas(
+            self.win, width=450, height=500, bg=Colors.BG,
+            highlightthickness=0
+        )
+        self.cvs.pack(fill=tk.BOTH, expand=True)
 
-        self.cx, self.cy = 180, 200
+        # Center origin for 3D projection
+        self.cx, self.cy = 225, 300
+
         self._anim_id = None
         self._poll()
 
+    def _project(self, x, y, z):
+        """Simple Orthographic Projection with isometric flavor."""
+        # Isometric-like camera angle (looking slightly down)
+        x, y, z = Vector3.rotate_x(x, y, z, 15)
+
+        # Scale and translate to canvas center
+        scale = 1.0
+        return self.cx + x * scale, self.cy - y * scale
+
     def _poll(self):
         pan, tilt = self.get_angles()
-        self._draw(pan, tilt)
-        self.l_info.config(
-            text=f"Pan: {pan:>6.1f}°    Tilt: {tilt:>6.1f}°")
-        self._anim_id = self.win.after(40, self._poll)
+        self._draw_scene(pan, tilt)
+        self._anim_id = self.win.after(30, self._poll) # 33fps approx
 
     def close(self):
         if self._anim_id:
             self.win.after_cancel(self._anim_id)
         self.win.destroy()
 
-    def _draw(self, pan: float, tilt: float):
+    def _draw_hud(self, pan, tilt):
+        """Draws clean, modern on-screen telemetry (HUD)."""
         c = self.cvs
-        c.delete("all")
 
-        bg = "#1e1e2e"
-        base_col = "#45475a"
-        pole_col = "#585b70"
-        head_col = "#89b4fa"
-        lens_col = "#a6e3a1"
-        accent = "#f5c2e7"
+        # Title
+        c.create_text(30, 30, text="PTZ TRACKER", anchor="w",
+                      font=("Helvetica", 14, "bold"), fill=Colors.TEXT)
+        c.create_text(30, 50, text="System Online • Tracking Active", anchor="w",
+                      font=("Helvetica", 9), fill=Colors.SUBTEXT)
 
-        cx, cy = self.cx, self.cy
-        pr = math.radians(pan)
-        tr = math.radians(90 - tilt)
+        # Pan Info
+        c.create_text(30, 90, text="PAN (Y-AXIS)", anchor="w",
+                      font=("Helvetica", 8, "bold"), fill=Colors.OVERLAY)
+        c.create_text(30, 110, text=f"{pan:05.1f}°", anchor="w",
+                      font=("Consolas", 22), fill=Colors.PAN_ACCENT)
 
-        # ── ground ellipse ──
-        c.create_oval(cx - 70, cy + 10, cx + 70, cy + 30,
-                      fill=base_col, outline="#6c7086", width=2)
+        # Tilt Info
+        c.create_text(420, 90, text="TILT (X-AXIS)", anchor="e",
+                      font=("Helvetica", 8, "bold"), fill=Colors.OVERLAY)
+        c.create_text(420, 110, text=f"{tilt:05.1f}°", anchor="e",
+                      font=("Consolas", 22), fill=Colors.TILT_ACCENT)
 
-        # ── pan base (rotates with pan) ──
-        bx = cx + 30 * math.sin(pr)
-        b_scale = 0.5 + 0.5 * abs(math.cos(pr))
-        base_w = 50 * b_scale
-        base_h = 16
-        c.create_oval(cx - base_w, cy - base_h, cx + base_w, cy + base_h,
-                      fill="#585b70", outline="#6c7086", width=2)
+        # Center Crosshair / Grid hints
+        c.create_line(self.cx - 10, self.cy, self.cx + 10, self.cy, fill=Colors.SURFACE)
+        c.create_line(self.cx, self.cy - 10, self.cx, self.cy + 10, fill=Colors.SURFACE)
 
-        # ── pole ──
-        pole_len = 100
-        pole_top = cy - base_h - pole_len
-        pole_x = cx + 8 * math.sin(pr)
-        pole_w = 10
-        c.create_rectangle(pole_x - pole_w // 2, pole_top,
-                           pole_x + pole_w // 2, cy - base_h,
-                           fill=pole_col, outline="#6c7086", width=1)
+    def _draw_scene(self, pan: float, tilt: float):
+        self.cvs.delete("all")
+        c = self.cvs
 
-        # ── tilt joint ──
-        jr = 10
-        jx = pole_x
-        jy = pole_top
-        c.create_oval(jx - jr, jy - jr, jx + jr, jy + jr,
-                      fill="#6c7086", outline="#9399b2", width=2)
+        # UI Overlay
+        self._draw_hud(pan, tilt)
 
-        # ── camera head (tilts) ──
-        head_len = 60
-        head_w = 22
-        hx = jx + head_len * math.cos(tr) * math.sin(pr)
-        hy = jy - head_len * math.sin(tr)
+        # --- 3D Geometry Definition ---
+        pole_height = 90
 
-        # head body as rotated rectangle — approximate with polygon
-        hw2 = head_w / 2
-        hl2 = head_len / 2
+        # Base ring (static)
+        self._draw_ellipse(0, 0, 0, radius_x=70, radius_z=70, color=Colors.SURFACE, outline=Colors.WIRE)
+
+        # --- Joint & Camera Math ---
+        # 1. Start with camera body points (local space)
+        cam_length = 80
+        cam_width = 30
+        cam_height = 30
+
+        # Local 3D Box vertices for the camera head
+        vertices = [
+            ( cam_width/2,  cam_height/2,  cam_length/2), # Front Top Right
+            (-cam_width/2,  cam_height/2,  cam_length/2), # Front Top Left
+            (-cam_width/2, -cam_height/2,  cam_length/2), # Front Bot Left
+            ( cam_width/2, -cam_height/2,  cam_length/2), # Front Bot Right
+            ( cam_width/2,  cam_height/2, -cam_length/2), # Back Top Right
+            (-cam_width/2,  cam_height/2, -cam_length/2), # Back Top Left
+            (-cam_width/2, -cam_height/2, -cam_length/2), # Back Bot Left
+            ( cam_width/2, -cam_height/2, -cam_length/2), # Back Bot Right
+        ]
+
+        # 2. Transform points (Tilt -> Pan -> Translate to pole top)
+        transformed_verts = []
+        for vx, vy, vz in vertices:
+            # Tilt (rotate around X) - User's 90-deg offset adjusted for standard 3D
+            rx, ry, rz = Vector3.rotate_x(vx, vy, vz, tilt - 90)
+            # Pan (rotate around Y) - Inverted for intuitive left/right
+            rx, ry, rz = Vector3.rotate_y(rx, ry, rz, -pan)
+            # Translate to top of pole
+            ry += pole_height
+            transformed_verts.append((rx, ry, rz))
+
+        # Project vertices to 2D
+        proj_verts = [self._project(x, y, z) for x, y, z in transformed_verts]
+
+        # --- Draw Render Pipeline (Back to Front) ---
+
+        # Pole
+        p_base = self._project(0, 0, 0)
+        p_top = self._project(0, pole_height, 0)
+        c.create_line(p_base[0], p_base[1], p_top[0], p_top[1],
+                      fill=Colors.OVERLAY, width=12, capstyle=tk.ROUND)
+        c.create_line(p_base[0], p_base[1], p_top[0], p_top[1],
+                      fill=Colors.SUBTEXT, width=4, capstyle=tk.ROUND) # Highlight
+
+        # Draw Camera Box Wireframe/Faces (simplified rendering)
+        front_face = [proj_verts[0], proj_verts[1], proj_verts[2], proj_verts[3]]
+        back_face = [proj_verts[4], proj_verts[5], proj_verts[6], proj_verts[7]]
+
+        # Draw connecting lines (Box Depth)
+        for i in range(4):
+            c.create_line(front_face[i][0], front_face[i][1],
+                          back_face[i][0], back_face[i][1], fill=Colors.OVERLAY, width=2)
+
+        # Back face
+        c.create_polygon(*[coord for pt in back_face for coord in pt],
+                         fill=Colors.BG, outline=Colors.OVERLAY, width=2)
+        # Front face
+        c.create_polygon(*[coord for pt in front_face for coord in pt],
+                         fill=Colors.SURFACE, outline=Colors.TILT_ACCENT, width=2)
+
+        # Lens (Center of front face)
+        lx = sum(p[0] for p in front_face) / 4
+        ly = sum(p[1] for p in front_face) / 4
+
+        # Lens math using projected center
+        c.create_oval(lx - 8, ly - 8, lx + 8, ly + 8,
+                      fill=Colors.BG, outline=Colors.LENS, width=2)
+        c.create_oval(lx - 3, ly - 3, lx + 3, ly + 3,
+                      fill=Colors.LENS, outline="")
+
+        # Laser/Direction Beam
+        beam_end_local = (0, 0, cam_length/2 + 60)
+        bx, by, bz = Vector3.rotate_x(*beam_end_local, tilt - 90)
+        bx, by, bz = Vector3.rotate_y(bx, by, bz, -pan)
+        bx, by, bz = bx, by + pole_height, bz
+        px, py = self._project(bx, by, bz)
+
+        c.create_line(lx, ly, px, py, fill=Colors.LENS, width=1, dash=(2, 4))
+
+        # Circular Pan Indicator on the ground
+        self._draw_arc(0, 0, 0, 50, pan, Colors.PAN_ACCENT)
+
+    def _draw_ellipse(self, x, y, z, radius_x, radius_z, color, outline):
+        """Draws a 3D circle on the XZ plane."""
         pts = []
-        for lx, ly in [(-hl2, -hw2), (hl2, -hw2), (hl2, hw2), (-hl2, hw2)]:
-            rx = lx * math.cos(tr) - ly * math.sin(tr)
-            ry = lx * math.sin(tr) + ly * math.cos(tr)
-            pts.append(jx + rx)
-            pts.append(jy - ry - 10)
+        for a in range(0, 360, 10):
+            rad = math.radians(a)
+            px, py, pz = x + math.cos(rad) * radius_x, y, z + math.sin(rad) * radius_z
+            pts.append(self._project(px, py, pz))
 
-        c.create_polygon(*pts, fill=head_col, outline="#b4befe", width=2)
+        self.cvs.create_polygon(*[c for p in pts for c in p], fill=color, outline=outline, width=2, smooth=True)
 
-        # ── lens (front of camera) ──
-        lens_x = jx + (head_len - 8) * math.cos(tr) * math.sin(pr)
-        lens_y = jy - (head_len - 8) * math.sin(tr)
-        lr = 8
-        c.create_oval(lens_x - lr, lens_y - lr, lens_x + lr, lens_y + lr,
-                      fill=lens_col, outline="#a6e3a1", width=1)
+    def _draw_arc(self, x, y, z, radius, pan_angle, color):
+        """Draws a dashed 3D arc indicating current pan angle."""
+        pts = []
+        for a in range(0, int(pan_angle) if pan_angle > 0 else 360 + int(pan_angle), 5):
+            rad = math.radians(a)
+            px, py, pz = x - math.sin(rad) * radius, y, z + math.cos(rad) * radius
+            pts.append(self._project(px, py, pz))
 
-        # ── light beam (forward direction hint) ──
-        beam_len = 40
-        bx2 = lens_x + beam_len * math.cos(tr) * math.sin(pr)
-        by2 = lens_y - beam_len * math.sin(tr)
-        c.create_line(lens_x, lens_y, bx2, by2,
-                      fill="#f5e0dc", width=1, dash=(4, 4))
-
-        # ── angle arc labels ──
-        c.create_text(60, 30, text=f"{pan:7.1f}°", anchor="w",
-                      font=("Consolas", 13), fill="#fab387")
-        c.create_text(60, 55, text="pan", anchor="w",
-                      font=("Consolas", 9), fill="#6c7086")
-
-        c.create_text(300, 30, text=f"{tilt:7.1f}°", anchor="e",
-                      font=("Consolas", 13), fill="#89b4fa")
-        c.create_text(300, 55, text="tilt", anchor="e",
-                      font=("Consolas", 9), fill="#6c7086")
-
-        # ── compass arc (pan reference) ──
-        c.create_arc(cx - 80, cy - 40, cx + 80, cy + 40,
-                     start=90, extent=-pan - 90,
-                     outline="#fab387", width=2, style="arc")
-        c.create_line(cx, cy, cx + 60 * math.sin(pr), cy - 60 * math.cos(pr),
-                      fill="#fab387", width=1.5, dash=(3, 3))
-
-        # ── tilt arc ──
-        arc_r = 50
-        c.create_arc(jx - arc_r, jy - arc_r, jx + arc_r, jy + arc_r,
-                     start=0, extent=-tilt + 90,
-                     outline="#89b4fa", width=2, style="arc",
-                     )
-
-        # ── title ──
-        c.create_text(180, 340, text="PAN / TILT",
-                      font=("Consolas", 8, "bold"), fill="#6c7086")
+        if len(pts) > 1:
+            self.cvs.create_line(*[c for p in pts for c in p], fill=color, width=2, dash=(4, 4))
 
 
 def demo():
     root = tk.Tk()
     root.withdraw()
-    import math, time
-    angles = [90.0, 90.0]
-    def get():
+
+    angles = [0.0, 90.0]
+
+    def get_simulated_angles():
         t = time.time()
-        angles[0] = 90 + 45 * math.sin(t * 0.5)
-        angles[1] = 70 + 40 * math.sin(t * 0.7 + 1)
+        # Smooth, sweeping cinematic movements
+        angles[0] = math.sin(t * 0.4) * 120  # Pan swings left and right
+        angles[1] = 90 + math.cos(t * 0.6) * 45  # Tilt looks up and down
         return angles[0], angles[1]
-    sw = SimulationWindow(root, get)
+
+    sw = SimulationWindow(root, get_simulated_angles)
     root.mainloop()
+
+if __name__ == '__main__':
+    demo()
