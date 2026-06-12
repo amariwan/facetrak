@@ -48,3 +48,10 @@ allowed = false
 
 [tool.uv]
 package = true
+
+# python-prctl (pulled in by picamera2) only builds on Linux; provide static
+# metadata so cross-platform lock resolution doesn't try to build its sdist.
+[[tool.uv.dependency-metadata]]
+name = "python-prctl"
+version = "1.8.1"
+requires-dist = []

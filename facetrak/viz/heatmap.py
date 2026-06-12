@@ -22,7 +22,7 @@ class FaceHeatmap:
         if self._map is None or not self._map.any() or self._map.max() < 1e-6:
             return frame
         norm = cv2.normalize(self._map, None, 0, 255, cv2.NORM_MINMAX)
-        colored = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
+        colored = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_TURBO)
         mask = norm > 5
         result = frame.copy()
         blended = cv2.addWeighted(frame, 1 - alpha, colored, alpha, 0)
