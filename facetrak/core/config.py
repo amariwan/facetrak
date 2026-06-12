@@ -13,7 +13,7 @@ DEFAULT_CONFIG = {
         {"name": "Built-in", "source": 0},
     ],
     "detect_width": 480,
-    "recog_threshold": 0.36,  # SFace cosine similarity
+    "recog_threshold": 0.36,
     "blur_unknown": False,
     "blur_persons": [],
     "heatmap": False,
@@ -28,6 +28,18 @@ DEFAULT_CONFIG = {
         "dead_zone": 15, "smooth": 0.12, "max_step": 3.0,
         "invert_pan": False, "invert_tilt": False,
     },
+    "zoom": {
+        "enabled": False,
+        "target_ratio": 0.3,
+        "hysteresis": 0.05,
+    },
+    "objects_enabled": False,
+    "pose_enabled": False,
+    "gestures_enabled": False,
+    "audio_enabled": False,
+    "pir_enabled": False,
+    "pir_gpio_pin": 17,
+    "depth_enabled": False,
 }
 
 

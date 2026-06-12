@@ -15,25 +15,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Raspberry Pi Camera Module (libcamera-based)
-pi = ["picamera2>=0.3"]
+# Raspberry Pi Camera Module (libcamera-based) — Linux only
+pi = ["picamera2>=0.3; sys_platform == 'linux'"]
 # ONVIF PTZ IP cameras
 onvif = ["onvif-zeep>=0.2.12"]
 # YOLO object detection
 yolo = ["ultralytics>=8.0"]
 # Microphone audio events
 audio = ["sounddevice>=0.4"]
-# All optional hardware support
-hardware = ["picamera2>=0.3", "onvif-zeep>=0.2.12", "RPi.GPIO>=0.7"]
+# All optional hardware support — Linux-only deps marked
+hardware = ["picamera2>=0.3; sys_platform == 'linux'",
+            "onvif-zeep>=0.2.12",
+            "RPi.GPIO>=0.7; sys_platform == 'linux'"]
 # Full AI suite
 ai = ["ultralytics>=8.0"]
-# Everything
-full = ["picamera2>=0.3", "onvif-zeep>=0.2.12", "RPi.GPIO>=0.7",
+# Everything — Linux-only deps marked
+full = ["picamera2>=0.3; sys_platform == 'linux'",
+        "onvif-zeep>=0.2.12",
+        "RPi.GPIO>=0.7; sys_platform == 'linux'",
         "sounddevice>=0.4", "ultralytics>=8.0"]
 
 [project.scripts]
 facetrak = "facetrak.__main__:main"
-facetrak-mcp = "facetrak.mcp_server:run"
+facetrak-mcp = "facetrak.servers.mcp:run"
+facetrak-api = "facetrak.servers.rest:run"
 
 [tool.setuptools.packages.find]
 include = ["facetrak*"]

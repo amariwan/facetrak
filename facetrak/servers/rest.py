@@ -1,22 +1,12 @@
-"""FastAPI REST server for FaceTrak.
-
-Runs in a daemon thread alongside the main UI or MCP server. Start with:
-    from facetrak.api import start_api_thread
-    start_api_thread(engine, port=8765)
-
-Or standalone:
-    python -m facetrak.api
-"""
 import logging
 import threading
-from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from . import db
-from .engine import FaceEngine
+from facetrak.core.engine import FaceEngine
+from facetrak.storage import db
 
 logger = logging.getLogger(__name__)
 
@@ -30,13 +20,12 @@ def _get() -> FaceEngine:
     return _engine
 
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI):
+app = FastAPI(title="FaceTrak", version="1.0")
+
+
+@app.on_event("startup")
+def _startup():
     db.init()
-    yield
-
-
-app = FastAPI(title="FaceTrak", version="1.0", lifespan=_lifespan)
 
 
 @app.get("/status")
@@ -146,7 +135,7 @@ def export_crowd():
 
 @app.get("/export/emotions")
 def export_emotions():
-    from .stats import EmotionTimeline
+    from facetrak.storage.stats import EmotionTimeline
     path = EmotionTimeline.export_csv()
     if not path:
         raise HTTPException(404, "No emotion data")

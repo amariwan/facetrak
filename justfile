@@ -11,15 +11,15 @@ run:
 
 # Start HTTP REST API server (port 8765 by default)
 api-serve port="8765":
-    {{python}} -m facetrak.api {{port}}
+    {{python}} -m facetrak.servers.rest {{port}}
 
 # Start MCP server for LLM integration (stdio)
 mcp-serve:
-    {{python}} -m facetrak.mcp_server
+    {{python}} -m facetrak.servers.mcp
 
 # Standalone pan-tilt simulation (no camera needed)
 sim:
-    {{python}} -c "from facetrak.simulation import demo; demo()"
+    {{python}} -c "from facetrak.viz.simulation import demo; demo()"
 
 # Install project + dev deps
 setup:
@@ -62,7 +62,7 @@ clean:
     @echo "Cleaned"
 
 update:
-    uv sync --upgrade --all-extras
+    uv pip install -e "." --upgrade
 
 # Show help
 default:

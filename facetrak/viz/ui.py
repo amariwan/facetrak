@@ -1,45 +1,23 @@
-"""FaceTrak HUD — structured dashboard with card-based layout.
-
-Architecture:
-  ┌─────────────────────────────────────────────────────────┐
-  │  ◆ OMEN    [▶] [●] [Register] [Servo] [Cam]     Sim   │  ← Command bar
-  ├─────────────────────────────┬───────────────────────────┤
-  │                             │ ┌─ FACE TELEMETRY ──────┐│
-  │                             │ │ Name   Pose   Servo   ││
-  │      VIDEO FEED             │ │ Dwell  Blinks Age/Gdr ││
-  │      (primary zone)         │ └───────────────────────┘│
-  │                             │ ┌─ ATTENTION ───────────┐│
-  │                             │ │ ████████░░ 72%       ││
-  │                             │ └───────────────────────┘│
-  │                             │ ┌─ EMOTION SIGNATURE ───┐│
-  │                             │ │    (pie chart)        ││
-  │                             │ └───────────────────────┘│
-  │                             │ ┌─ FACE MANAGEMENT ─────┐│
-  │                             │ │ Alice  ●  Bob  ○     ││
-  │                             │ │ [Toggle Blur]         ││
-  │                             │ └───────────────────────┘│
-  ├─────────────────────────────┴───────────────────────────┤
-  │ 📷 cam1  ⊞ 320,240  ◈ 5/12/3  ◎ 90°  ◆ 3  ● REC       │ ← Telemetry
-  └─────────────────────────────────────────────────────────┘
-"""
+import io
 import math
 import tkinter as tk
 from tkinter import ttk, simpledialog, messagebox
 
 import cv2
-from PIL import Image, ImageTk
+from PIL import Image
 
-from facetrak import config
-from facetrak.engine import (FaceEngine, SERVO_TARGET_LARGEST,
-                              SERVO_TARGET_KNOWN, SERVO_TARGET_UNKNOWN)
-from facetrak.simulation import SimulationWindow
+from facetrak.core import config
+from facetrak.core.engine import (
+    FaceEngine, SERVO_TARGET_LARGEST,
+    SERVO_TARGET_KNOWN, SERVO_TARGET_UNKNOWN,
+)
+from .simulation import SimulationWindow
 
 _POLL_MS = 30
 _MAX_W   = 800
 _SPARK_W = 200
 _SPARK_H = 85
 
-# ── OMEN palette ─────────────────────────────────────────
 _VOID   = "#0A0E17"
 _SURF   = "#111827"
 _CARD   = "#1A1F2E"
@@ -57,7 +35,6 @@ _EMO_COLORS = {"happy": _GRN, "sad": "#5B9BFF", "angry": _RED,
 
 
 class _Card(ttk.LabelFrame):
-    """A labeled card panel with fixed styling."""
     def __init__(self, parent, title, **kw):
         super().__init__(parent, text=f"  {title}  ", **kw)
         self.configure(labelwidget=ttk.Label(
@@ -71,6 +48,7 @@ class MainWindow:
         self.root = root
         self.eng  = FaceEngine()
         self._poll_id = None
+        self._hud_id = None
         self._reg_name: str | None = None
         self._reg_progress: ttk.Progressbar | None = None
         self._scan_y = 0
@@ -91,8 +69,6 @@ class MainWindow:
 
         self._build_layout()
         self._animate_hud()
-
-    # ── theme ─────────────────────────────────────────────
 
     def _setup_theme(self):
         style = ttk.Style()
@@ -131,8 +107,6 @@ class MainWindow:
         style.configure("TScale", background=_VOID, troughcolor=_CARD,
                         bordercolor=_BORD, slidercolor=_CYAN)
 
-    # ── layout ───────────────────────────────────────────
-
     def _make_chk(self, parent, text, command):
         cb = ttk.Checkbutton(parent, text=text, command=command)
         cb.state(["!alternate"])
@@ -142,28 +116,24 @@ class MainWindow:
         self.root.grid_rowconfigure(1, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
-        self._build_command_bar()    # row 0
-        self._build_content_area()   # row 1
-        self._build_telemetry_bar()  # row 2
-
-    # ── row 0: command bar ───────────────────────────────
+        self._build_command_bar()
+        self._build_content_area()
+        self._build_telemetry_bar()
 
     def _build_command_bar(self):
         bar = tk.Frame(self.root, bg=_SURF, height=42)
         bar.grid(row=0, column=0, sticky=tk.EW)
         bar.grid_propagate(False)
-        bar.columnconfigure(10, weight=1)  # spacer on the right
+        bar.columnconfigure(10, weight=1)
 
         pad = {"padx": 6, "pady": 0}
 
-        # Brand
         tk.Label(bar, text="◆ OMEN", fg=_CYAN, bg=_SURF,
                  font=("Helvetica", 14, "bold")).grid(row=0, column=0, padx=(12, 8))
 
         ttk.Separator(bar, orient=tk.VERTICAL).grid(
             row=0, column=1, sticky=tk.NS, padx=4, pady=8)
 
-        # Group: camera control
         col = 2
         self._start_btn = tk.Button(bar, text="▶ START", fg=_GRN, bg=_CARD,
                                     activeforeground=_VOID, activebackground=_GRN,
@@ -182,7 +152,6 @@ class MainWindow:
         ttk.Separator(bar, orient=tk.VERTICAL).grid(
             row=0, column=col, sticky=tk.NS, padx=4, pady=8); col += 1
 
-        # Group: toggles
         for txt, cmd in [("Blur [B]", self._toggle_blur),
                           ("Heat [H]", self._toggle_heatmap),
                           ("Servo", self._toggle_servo)]:
@@ -192,7 +161,6 @@ class MainWindow:
         ttk.Separator(bar, orient=tk.VERTICAL).grid(
             row=0, column=col, sticky=tk.NS, padx=4, pady=8); col += 1
 
-        # Group: register
         tk.Button(bar, text="⟐ REGISTER", fg=_MAG, bg=_CARD,
                   activeforeground=_VOID, activebackground=_MAG,
                   font=("Helvetica", 9, "bold"), relief=tk.FLAT, padx=8,
@@ -207,7 +175,6 @@ class MainWindow:
         ttk.Separator(bar, orient=tk.VERTICAL).grid(
             row=0, column=col, sticky=tk.NS, padx=4, pady=8); col += 1
 
-        # Group: servo target
         tk.Label(bar, text="TRACK", fg=_TXT2, bg=_SURF,
                  font=("Helvetica", 8)).grid(row=0, column=col, padx=(6, 2))
         col += 1
@@ -221,7 +188,6 @@ class MainWindow:
         srv_cb.bind("<<ComboboxSelected>>",
                     lambda _: self.eng.set_servo_target(self._srv_var.get()))
 
-        # Group: camera selector (right-aligned via column 10 spacer)
         tk.Label(bar, text="CAM", fg=_TXT2, bg=_SURF,
                  font=("Helvetica", 8)).grid(row=0, column=col, padx=(6, 2))
         col += 1
@@ -231,7 +197,6 @@ class MainWindow:
         self._cam_cb.grid(row=0, column=col, **pad); col += 1
         self._cam_cb.bind("<<ComboboxSelected>>", self._on_cam_select)
 
-        # Sim button (far right)
         col = 12
         tk.Button(bar, text="⛭ SIM", fg=_TXT2, bg=_CARD,
                   activeforeground=_TXT, activebackground=_BORD,
@@ -239,15 +204,12 @@ class MainWindow:
                   cursor="hand2", command=self._open_sim
                   ).grid(row=0, column=col, padx=(0, 8))
 
-    # ── row 1: content (video + dashboard panel) ────────
-
     def _build_content_area(self):
         main = tk.Frame(self.root, bg=_VOID)
         main.grid(row=1, column=0, sticky=tk.NSEW)
         main.columnconfigure(0, weight=1)
         main.rowconfigure(0, weight=1)
 
-        # Left: video
         video_frame = tk.Frame(main, bg=_VOID)
         video_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(10, 4), pady=6)
         video_frame.columnconfigure(0, weight=1)
@@ -261,13 +223,11 @@ class MainWindow:
         self._video_canvas.create_window(0, 0, window=self._video_label,
                                           anchor=tk.NW, tags="vid")
 
-        # Face strip below video
         self._face_strip = tk.Frame(video_frame, bg=_VOID, height=64)
         self._face_strip.grid(row=1, column=0, sticky=tk.EW, pady=(4, 0))
         self._face_strip.grid_propagate(False)
         self._face_thumbs: list[tk.Label] = []
 
-        # Right: dashboard panel
         right = tk.Frame(main, bg=_SURF, width=280)
         right.grid(row=0, column=1, sticky=tk.NS, padx=(4, 10), pady=6)
         right.grid_propagate(False)
@@ -277,7 +237,6 @@ class MainWindow:
     def _build_dashboard(self, parent):
         parent.columnconfigure(0, weight=1)
 
-        # ── Card 1: Face Telemetry ──
         card = _Card(parent, "FACE TELEMETRY")
         card.grid(row=0, column=0, sticky=tk.EW, padx=8, pady=(8, 4))
         card.columnconfigure(1, weight=1)
@@ -300,21 +259,18 @@ class MainWindow:
             val.grid(row=i, column=1, sticky=tk.EW, padx=(0, 8), pady=1)
             self._tel[key] = val
 
-        # ── Card 2: Attention Gauge ──
         card2 = _Card(parent, "ATTENTION")
         card2.grid(row=1, column=0, sticky=tk.EW, padx=8, pady=4)
         self._attn_canvas = tk.Canvas(card2, width=248, height=36,
                                        bg=_VOID, highlightthickness=0)
         self._attn_canvas.pack(padx=8, pady=4)
 
-        # ── Card 3: Emotion Signature ──
         card3 = _Card(parent, "EMOTION SIGNATURE")
         card3.grid(row=2, column=0, sticky=tk.EW, padx=8, pady=4)
         self._emo_canvas = tk.Canvas(card3, width=248, height=110,
                                       bg=_VOID, highlightthickness=0)
         self._emo_canvas.pack(padx=8, pady=4)
 
-        # ── Card 4: Face Management ──
         card4 = _Card(parent, "FACE MANAGEMENT")
         card4.grid(row=3, column=0, sticky=tk.NSEW, padx=8, pady=(4, 8))
         card4.columnconfigure(0, weight=1)
@@ -345,10 +301,7 @@ class MainWindow:
                         command=self._toggle_person_blur)
         btn.grid(row=1, column=0, sticky=tk.EW, padx=6, pady=(0, 4))
 
-        # spacer to push cards up
         parent.rowconfigure(4, weight=1)
-
-    # ── row 2: telemetry bar ─────────────────────────────
 
     def _build_telemetry_bar(self):
         bar = tk.Frame(self.root, bg=_VOID, height=26)
@@ -382,8 +335,6 @@ class MainWindow:
                                    bg=_VOID, highlightthickness=0)
         self._rec_dot.pack(side=tk.RIGHT, padx=4)
 
-    # ── camera ───────────────────────────────────────────
-
     def _populate_cameras(self):
         cfg = config.load()
         cams = cfg.get("cameras", [])
@@ -407,8 +358,6 @@ class MainWindow:
             messagebox.showerror("Error", "Failed to switch camera.")
             self._populate_cameras()
 
-    # ── start / stop ─────────────────────────────────────
-
     def _toggle_start(self):
         if self.eng.running:
             self._stop()
@@ -424,12 +373,17 @@ class MainWindow:
         self._populate_cameras()
         self._cam_cb.state(["!disabled"])
         self._refresh_blur_list()
+        if self._hud_id is None:
+            self._animate_hud()
         self._poll()
 
     def _stop(self):
         if self._poll_id:
             self.root.after_cancel(self._poll_id)
             self._poll_id = None
+        if self._hud_id:
+            self.root.after_cancel(self._hud_id)
+            self._hud_id = None
         self.eng.stop()
         self._start_btn.config(text="▶ START", fg=_GRN)
         self._rec_btn.config(state=tk.DISABLED, fg=_TXT2, text="● REC")
@@ -438,8 +392,6 @@ class MainWindow:
         for lbl in self._face_thumbs:
             lbl.destroy()
         self._face_thumbs.clear()
-
-    # ── poll loop ─────────────────────────────────────────
 
     def _poll(self):
         if not self.eng.running:
@@ -452,7 +404,9 @@ class MainWindow:
                 s = _MAX_W / w
                 rgb = cv2.resize(rgb, (_MAX_W, int(h * s)))
             img = Image.fromarray(rgb)
-            self._tk_img = ImageTk.PhotoImage(img)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            self._tk_img = tk.PhotoImage(data=buf.getvalue())
             self._video_label.config(image=self._tk_img)
             self._update_telemetry()
             self._update_face_telemetry()
@@ -465,7 +419,7 @@ class MainWindow:
                                   fg=_RED if rec_on else _TXT2)
 
         if self._reg_name and self.eng._capturing:
-            from facetrak.engine import _MAX_SAMPLES, _MIN_REG_SAMPLES
+            from facetrak.core.engine import _MAX_SAMPLES, _MIN_REG_SAMPLES
             n = len(self.eng._samples_buffer)
             if self._reg_progress:
                 self._reg_progress["value"] = int(100 * n / _MAX_SAMPLES)
@@ -494,8 +448,6 @@ class MainWindow:
         self._tele_labels["crowd"].config(text=str(len(e.tracker.active)))
         self._tele_labels["known"].config(text=str(len(e.db.known_names)))
 
-    # ── face telemetry card ──────────────────────────────
-
     def _update_face_telemetry(self):
         e = self.eng
         m = e.metrics
@@ -515,8 +467,6 @@ class MainWindow:
             text=f"Y:{m.yaw:.0f}°  P:{m.pitch:.0f}°  R:{m.roll:.0f}°")
         self._tel["servo"].config(
             text=f"Pan:{e.current_pan:.0f}°  Tilt:{e.current_tilt:.0f}°")
-
-    # ── face thumbnails ──────────────────────────────────
 
     def _update_face_strip(self):
         for lbl in self._face_thumbs:
@@ -543,7 +493,9 @@ class MainWindow:
 
             framed = Image.new("RGB", (50, 50), _VOID)
             framed.paste(thumb, (2, 2))
-            photo = ImageTk.PhotoImage(framed)
+            buf = io.BytesIO()
+            framed.save(buf, format="PNG")
+            photo = tk.PhotoImage(data=buf.getvalue())
 
             lbl = tk.Label(self._face_strip, image=photo, bg=_VOID,
                            highlightbackground=border,
@@ -557,8 +509,6 @@ class MainWindow:
                 tk.Label(self._face_strip, text=t.name[:6],
                          fg=_GRN, bg=_VOID,
                          font=("Helvetica", 7)).pack(side=tk.LEFT)
-
-    # ── attention gauge ──────────────────────────────────
 
     def _draw_attn_gauge(self):
         c = self._attn_canvas
@@ -580,8 +530,6 @@ class MainWindow:
         label = "ATTENTIVE" if m.attentive else "DISTRACTED"
         c.create_text(w // 2, 8, text=label, fill=_TXT,
                       font=("Helvetica", 8), anchor=tk.S)
-
-    # ── emotion wheel ────────────────────────────────────
 
     def _draw_emotion_wheel(self):
         c = self._emo_canvas
@@ -609,8 +557,6 @@ class MainWindow:
             c.create_text(lx, ly, text=f"{emotion[:3]}",
                           fill=color, font=("Helvetica", 7))
             start += extent
-
-    # ── HUD overlays ─────────────────────────────────────
 
     def _animate_hud(self):
         vw = self._video_canvas.winfo_width()
@@ -645,7 +591,6 @@ class MainWindow:
                     font=("Helvetica", 8, "bold"),
                     anchor=tk.SW, tags="hud")
 
-        # Recording dot animation
         rec_on = self.eng.running and self.eng.recorder.recording
         self._rec_dot.delete("all")
         if rec_on:
@@ -660,9 +605,7 @@ class MainWindow:
             self._rec_dot.create_oval(
                 2, 2, 10, 10, fill=_CARD, outline=_BORD, width=1)
 
-        self.root.after(50, self._animate_hud)
-
-    # ── controls ─────────────────────────────────────────
+        self._hud_id = self.root.after(50, self._animate_hud)
 
     def _toggle_rec(self):
         self.eng.toggle_record()
@@ -675,8 +618,6 @@ class MainWindow:
 
     def _toggle_servo(self):
         self.eng.toggle_servo()
-
-    # ── registration ─────────────────────────────────────
 
     def _register_dialog(self):
         if not self.eng.running:
@@ -722,8 +663,6 @@ class MainWindow:
             messagebox.showinfo("Done", f"Registered '{name}'.")
         else:
             messagebox.showerror("Error", "Not enough samples — try again.")
-
-    # ── blur list ────────────────────────────────────────
 
     def _refresh_blur_list(self):
         self._blur_list.delete(0, tk.END)

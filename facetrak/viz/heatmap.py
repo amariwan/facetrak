@@ -1,8 +1,3 @@
-"""Accumulate face-center positions as a heat map with exponential decay.
-
-Call `update()` each frame with the list of face centers, then `overlay()`
-to get the frame with the heat map blended in.
-"""
 import cv2
 import numpy as np
 

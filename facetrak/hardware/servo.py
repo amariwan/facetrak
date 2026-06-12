@@ -1,7 +1,11 @@
+import logging
+
 import serial
 import serial.tools.list_ports
 import numpy as np
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class PanTiltController:
@@ -36,7 +40,8 @@ class PanTiltController:
             self.port = port
             self.baud = baud
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug("Servo connect failed on %s: %s", port, exc)
             self.ser = None
             return False
 
@@ -79,7 +84,6 @@ class PanTiltController:
         return self.pan, self.tilt
 
     def move_to(self, pan: float, tilt: float) -> tuple[float, float]:
-        """Jump directly to absolute angles, bypassing smoothing."""
         self.pan = float(np.clip(pan, self.pan_min, self.pan_max))
         self.tilt = float(np.clip(tilt, self.tilt_min, self.tilt_max))
         self.pan_target = self.pan

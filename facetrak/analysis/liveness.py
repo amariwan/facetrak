@@ -1,21 +1,8 @@
-"""Anti-spoofing liveness gate for registration.
-
-Requires the subject to perform BLINK_REQUIRED blinks AND move their head
-by at least HEAD_TURN_DEG degrees in yaw before registration is accepted.
-This prevents someone from registering a photo of another person.
-
-Usage:
-    checker = LivenessChecker()
-    checker.reset()                                # start fresh
-    checker.update(eyes_closed, yaw)               # call each frame
-    if checker.passed: ...                         # gate cleared
-    checker.status_line                            # display string
-"""
 from dataclasses import dataclass, field
 
 BLINK_REQUIRED = 2
 HEAD_TURN_DEG = 12.0
-_YAW_WINDOW = 20          # frames to track for spread calculation
+_YAW_WINDOW = 20
 
 
 @dataclass

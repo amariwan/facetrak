@@ -1,17 +1,3 @@
-"""FaceTrak engine — detection, recognition, tracking, and all analysis.
-
-Per-frame pipeline:
-  1. YuNet detects all faces on a downscaled frame.
-  2. IoU tracker assigns stable IDs; re-ID matches returning faces.
-  3. SFace embeddings identify each track (rate-limited).
-  4. Age/gender estimated once per track (cached _AGE_CACHE_FRAMES frames).
-  5. FaceAnalyzer computes pose + gaze + expression for the primary face.
-  6. Liveness checker gates registration samples.
-  7. Quality score filters registration samples.
-  8. Heatmap, crowd monitor, and emotion timeline are updated.
-  9. Servo follows the selected target face.
-  10. Overlay is drawn and the frame is returned.
-"""
 import datetime
 import logging
 from pathlib import Path
@@ -19,38 +5,36 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import camera, config, db
-from .camera import CameraSource, DigitalZoom, from_config as cameras_from_config
-from .ai import ObjectDetector, PoseEstimator, GestureDetector
-from .sensors import AudioMonitor, AudioEvent, PIRSensor, DepthEstimator
-from .age_gender import AgeGenderEstimator
-from .analysis import FaceAnalyzer, FaceMetrics
-from .crowd import CrowdMonitor
-from .detection import YuNetDetector
-from .events import PresenceLog
-from .facedb import FaceDatabase
-from .heatmap import FaceHeatmap
-from .liveness import LivenessChecker
-from .notifier import Notifier
-from .quality import score as quality_score, GOOD_THRESHOLD
-from .recorder import VideoRecorder
-from .servo import PanTiltController
-from .stats import EmotionTimeline
-from .tracker import FaceTracker, Track
+from . import config as cfgmod
+from facetrak.recog import (
+    YuNetDetector, FaceTracker, FaceDatabase,
+    quality_score, GOOD_THRESHOLD,
+    AgeGenderEstimator,
+)
+from facetrak.analysis import FaceAnalyzer, LivenessChecker
+from facetrak.viz.overlay import draw_overlay
+from facetrak.viz.heatmap import FaceHeatmap
+from facetrak.storage import (
+    init as db_init,
+    PresenceLog, CrowdMonitor, EmotionTimeline,
+)
+from facetrak.hardware.servo import PanTiltController
+from facetrak.hardware.recorder import VideoRecorder
+from facetrak.camera import CameraSource, from_config as cameras_from_config
+from facetrak.ai import ObjectDetector, PoseEstimator, GestureDetector
+from facetrak.sensors import AudioMonitor, PIRSensor, DepthEstimator
+from facetrak.utils.notifier import Notifier
+from facetrak.models import FaceMetrics
+from facetrak.models.track import Track
 
 logger = logging.getLogger(__name__)
 
 _MAX_SAMPLES       = 20
 _MIN_REG_SAMPLES   = 3
-_EMBED_EVERY       = 5     # frames between re-identification passes
-_AGE_CACHE_FRAMES  = 90    # frames between age/gender re-inference per track
+_EMBED_EVERY       = 5
+_AGE_CACHE_FRAMES  = 90
 _DEFAULT_THRESHOLD = 0.36
 
-_COLOR_KNOWN   = (0, 255, 0)
-_COLOR_UNKNOWN = (0, 165, 255)
-_COLOR_HUD     = (200, 200, 200)
-
-# Servo target modes
 SERVO_TARGET_LARGEST  = "largest"
 SERVO_TARGET_KNOWN    = "known"
 SERVO_TARGET_UNKNOWN  = "unknown"
@@ -58,8 +42,8 @@ SERVO_TARGET_UNKNOWN  = "unknown"
 
 class FaceEngine:
     def __init__(self):
-        self.cfg = config.load()
-        db.init()
+        self.cfg = cfgmod.load()
+        db_init()
 
         self.db          = FaceDatabase()
         self.servo       = PanTiltController(self.cfg)
@@ -105,7 +89,7 @@ class FaceEngine:
         self.heatmap_enabled = self.cfg.get("heatmap", False)
 
         threshold = self.cfg.get("recog_threshold", _DEFAULT_THRESHOLD)
-        if threshold > 0.5:   # legacy HOG scale
+        if threshold > 0.5:
             threshold = _DEFAULT_THRESHOLD
             self.cfg["recog_threshold"] = threshold
         self.recog_threshold = threshold
@@ -132,7 +116,7 @@ class FaceEngine:
         if cam_idx is not None:
             self.current_cam_idx = cam_idx
             self.cfg["camera"] = cam_idx
-            config.save(self.cfg)
+            cfgmod.save(self.cfg)
 
         try:
             self.cameras = cameras_from_config(self.cfg)
@@ -140,7 +124,6 @@ class FaceEngine:
             logger.error("Failed to open cameras: %s", exc)
             return False
 
-        # primary camera is the first in the list (or the one matching cam_idx)
         idx = min(self.current_cam_idx, len(self.cameras) - 1)
         self.cam = self.cameras[idx]
 
@@ -205,7 +188,7 @@ class FaceEngine:
         self.pir_sensor.stop()
         if self.servo.connected:
             self.servo.disconnect()
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
 
     # ── per-frame pipeline ───────────────────────────────
 
@@ -226,7 +209,7 @@ class FaceEngine:
                 self.presence.appeared(t.name, t.track_id)
                 t.announced = True
         self._log_ended(ended)
-        self._identify(small, active)
+        self._identify(small, active, frame)
         self._age_gender_update(small, active, frame)
 
         primary = self._select_servo_target(active)
@@ -245,9 +228,18 @@ class FaceEngine:
                 self.metrics.emotion, self.metrics.smile,
                 self.metrics.attentive, self.metrics.yaw, self.metrics.pitch)
 
-        self._draw_overlay(frame, active)
+        frame = draw_overlay(
+            frame, active, self.metrics, len(self.tracker.active),
+            len(self.db.known_names), self.current_pan, self.current_tilt,
+            recording=self.recorder.recording,
+            blur_enabled=self.blur_enabled, blur_persons=self.blur_persons,
+            capturing=self._capturing,
+            samples_buffer_len=len(self._samples_buffer),
+            max_samples=_MAX_SAMPLES,
+            liveness_status=self.liveness.status_line,
+            overlay_text=self.overlay_text,
+        )
 
-        # sensor fusion
         if self.audio_enabled and self.audio_monitor.enabled:
             self.last_audio_events = self.audio_monitor.poll_all()
             for ev in self.last_audio_events:
@@ -258,7 +250,6 @@ class FaceEngine:
             if motion_events:
                 self.last_motion = motion_events[-1].active
 
-        depth_map = None
         if self.depth_enabled and self.depth_estimator.enabled:
             depth_map = self.depth_estimator.estimate(frame)
             if depth_map is not None:
@@ -266,7 +257,6 @@ class FaceEngine:
                 face_bboxes = [(t.det.x, t.det.y, t.det.w, t.det.h) for t in active]
                 self.depth_estimator.draw_face_distances(frame, depth_map, face_bboxes)
 
-        # optional AI modules
         if self.objects_enabled and self.object_detector.enabled:
             objects = self.object_detector.detect(frame)
             self.object_detector.draw(frame, objects)
@@ -293,7 +283,7 @@ class FaceEngine:
                            interpolation=cv2.INTER_LINEAR)
         return small, scale
 
-    def _identify(self, small: np.ndarray, tracks: list[Track]):
+    def _identify(self, small: np.ndarray, tracks: list, full_frame: np.ndarray):
         for t in tracks:
             needs = (t.name is None
                      or self._frame_no % _EMBED_EVERY == 0)
@@ -311,20 +301,22 @@ class FaceEngine:
             if t.name and self.cfg.get("notifications", True):
                 self.notifier.notify(t.name)
             if self._capturing and emb is not None:
-                self._maybe_collect(emb)
+                self._maybe_collect(emb, t, full_frame)
 
-    def _maybe_collect(self, emb: np.ndarray):
+    def _maybe_collect(self, emb: np.ndarray, track: Track, frame: np.ndarray):
         if len(self._samples_buffer) >= _MAX_SAMPLES:
             return
-        q = quality_score(
-            np.zeros((64, 64, 3), np.uint8),
-            self.metrics.yaw, self.metrics.pitch)
+        x1 = max(0, track.det.x); y1 = max(0, track.det.y)
+        x2 = min(frame.shape[1], track.det.x + track.det.w)
+        y2 = min(frame.shape[0], track.det.y + track.det.h)
+        crop = frame[y1:y2, x1:x2]
+        q = quality_score(crop, self.metrics.yaw, self.metrics.pitch)
         if q >= GOOD_THRESHOLD or not self.metrics.blendshapes:
             self._samples_buffer.append(emb)
         self.liveness.update(self.metrics.eyes_closed, self.metrics.yaw)
 
     def _age_gender_update(self, small: np.ndarray,
-                           tracks: list[Track], full_frame: np.ndarray):
+                           tracks: list, full_frame: np.ndarray):
         for t in tracks:
             cached = self._age_cache.get(t.track_id)
             if cached and (self._frame_no - cached[2]) < _AGE_CACHE_FRAMES:
@@ -341,7 +333,7 @@ class FaceEngine:
             t.age, t.gender = age, gender
             self._age_cache[t.track_id] = (age, gender, self._frame_no)
 
-    def _select_servo_target(self, active: list[Track]) -> Track | None:
+    def _select_servo_target(self, active: list):
         if not active:
             return None
         if self.servo_target == SERVO_TARGET_KNOWN:
@@ -352,7 +344,7 @@ class FaceEngine:
             return max(unknown, key=lambda t: t.det.area) if unknown else None
         return self.tracker.largest()
 
-    def _log_ended(self, ended: list[Track]):
+    def _log_ended(self, ended: list):
         for t in ended:
             self.presence.left(t.name, t.track_id, t.dwell, t.blink_count)
             self._age_cache.pop(t.track_id, None)
@@ -372,63 +364,6 @@ class FaceEngine:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         self.metrics = self.analyzer.analyze(rgb)
         primary.update_blink(self.metrics.eyes_closed)
-
-    # ── rendering ────────────────────────────────────────
-
-    def _draw_overlay(self, frame: np.ndarray, tracks: list[Track]):
-        h, w = frame.shape[:2]
-        for t in tracks:
-            self._draw_track(frame, t, w, h)
-        if self.recorder.recording:
-            cv2.circle(frame, (30, 30), 10, (0, 0, 255), -1)
-            cv2.putText(frame, "REC", (50, 36),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        self._draw_hud(frame, h, w)
-
-    def _draw_track(self, frame: np.ndarray, t: Track, w: int, h: int):
-        x1 = max(0, t.det.x); y1 = max(0, t.det.y)
-        x2 = min(w, t.det.x + t.det.w); y2 = min(h, t.det.y + t.det.h)
-        known = t.name is not None
-        should_blur = (
-            (self.blur_enabled and not known)
-            or (known and t.name in self.blur_persons)
-        )
-        if should_blur and x2 > x1 and y2 > y1:
-            k = max(1, min(t.det.w, t.det.h) // 6) | 1
-            frame[y1:y2, x1:x2] = cv2.GaussianBlur(
-                frame[y1:y2, x1:x2], (k, k), 0)
-        color = _COLOR_KNOWN if known else _COLOR_UNKNOWN
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        label = (f"#{t.track_id} {t.name} ({t.sim:.2f}) {t.gender}/{t.age}"
-                 if known else
-                 f"#{t.track_id} Unknown {t.gender}/{t.age}")
-        cv2.putText(frame, label, (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
-        cv2.putText(frame, f"{t.dwell:.0f}s | {t.blink_count}blinks",
-                    (x1, y2 + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.38, color, 1)
-
-    def _draw_hud(self, frame: np.ndarray, h: int, w: int):
-        m = self.metrics
-        lines = [
-            f"Pan:{self.current_pan:.1f} Tilt:{self.current_tilt:.1f}  "
-            f"Yaw:{m.yaw:.1f} Pitch:{m.pitch:.1f} Roll:{m.roll:.1f}",
-            f"Emotion:{m.emotion}  Smile:{m.smile:.2f}  "
-            f"Gaze:{m.gaze_label}  Attn:{'Y' if m.attentive else 'N'}",
-            f"Faces:{len(self.tracker.active)} | "
-            f"Known:{len(self.db.known_names)}",
-        ]
-        if self._capturing:
-            pct = int(100 * len(self._samples_buffer) / _MAX_SAMPLES)
-            lines.append(
-                f"REGISTERING  samples:{len(self._samples_buffer)}/{_MAX_SAMPLES} "
-                f"[{'#'*(pct//10)}{' '*(10-pct//10)}]  "
-                f"{self.liveness.status_line}")
-        if self.overlay_text:
-            lines.append(self.overlay_text)
-        y0 = h - 20 * len(lines) - 6
-        for i, line in enumerate(lines):
-            cv2.putText(frame, line, (10, y0 + i * 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, _COLOR_HUD, 1)
 
     # ── commands ─────────────────────────────────────────
 
@@ -484,7 +419,7 @@ class FaceEngine:
     def toggle_blur(self) -> bool:
         self.blur_enabled = not self.blur_enabled
         self.cfg["blur_unknown"] = self.blur_enabled
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
         return self.blur_enabled
 
     def toggle_servo(self) -> bool:
@@ -497,7 +432,7 @@ class FaceEngine:
         self.cfg["heatmap"] = self.heatmap_enabled
         if not self.heatmap_enabled:
             self.heatmap.reset()
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
         return self.heatmap_enabled
 
     def set_blur_person(self, name: str, blur: bool):
@@ -506,14 +441,14 @@ class FaceEngine:
         else:
             self.blur_persons.discard(name)
         self.cfg["blur_persons"] = sorted(self.blur_persons)
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
 
     def set_servo_target(self, mode: str):
         assert mode in (SERVO_TARGET_LARGEST, SERVO_TARGET_KNOWN,
                         SERVO_TARGET_UNKNOWN)
         self.servo_target = mode
         self.cfg["servo_target"] = mode
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
 
     def set_overlay(self, text: str):
         self.overlay_text = text
@@ -523,7 +458,7 @@ class FaceEngine:
         if self.objects_enabled and not self.object_detector.enabled:
             self.object_detector.load()
         self.cfg["objects_enabled"] = self.objects_enabled
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
         return self.objects_enabled
 
     def toggle_pose(self) -> bool:
@@ -531,7 +466,7 @@ class FaceEngine:
         if self.pose_enabled and not self.pose_estimator.enabled:
             self.pose_estimator.load()
         self.cfg["pose_enabled"] = self.pose_enabled
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
         return self.pose_enabled
 
     def toggle_audio(self) -> bool:
@@ -541,7 +476,7 @@ class FaceEngine:
         elif not self.audio_enabled:
             self.audio_monitor.stop()
         self.cfg["audio_enabled"] = self.audio_enabled
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
         return self.audio_enabled
 
     def toggle_pir(self) -> bool:
@@ -551,7 +486,7 @@ class FaceEngine:
         elif not self.pir_enabled:
             self.pir_sensor.stop()
         self.cfg["pir_enabled"] = self.pir_enabled
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
         return self.pir_enabled
 
     def toggle_depth(self) -> bool:
@@ -559,7 +494,7 @@ class FaceEngine:
         if self.depth_enabled and not self.depth_estimator.enabled:
             self.depth_estimator.load()
         self.cfg["depth_enabled"] = self.depth_enabled
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
         return self.depth_enabled
 
     def toggle_gestures(self) -> bool:
@@ -567,7 +502,7 @@ class FaceEngine:
         if self.gestures_enabled and not self.gesture_detector.enabled:
             self.gesture_detector.load()
         self.cfg["gestures_enabled"] = self.gestures_enabled
-        config.save(self.cfg)
+        cfgmod.save(self.cfg)
         return self.gestures_enabled
 
     def export_crowd_csv(self) -> str:

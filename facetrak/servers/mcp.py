@@ -1,11 +1,11 @@
 import threading
 import time
 from mcp.server.fastmcp import FastMCP
-import cv2
-from facetrak import config
-from facetrak.facedb import FaceDatabase
-from facetrak.servo import PanTiltController
-from facetrak.engine import FaceEngine
+
+from facetrak.core import config
+from facetrak.recog.facedb import FaceDatabase
+from facetrak.hardware.servo import PanTiltController
+from facetrak.core.engine import FaceEngine
 
 server = FastMCP(
     "FaceTrak",
@@ -29,9 +29,6 @@ def _poll_loop():
     while e.running:
         e.step()
         time.sleep(0.03)
-
-
-# ── Face Database Tools ──────────────────────────────────
 
 
 @server.tool(description="List all registered people")
@@ -59,7 +56,7 @@ def forget_person(name: str) -> str:
     return f"Forgot '{name}'."
 
 
-@server.tool(description="Register a new person from camera. Name is required.")
+@server.tool(description="Register a new person from camera")
 def register_person(name: str) -> str:
     e = _get_engine()
     started_here = not e.running
@@ -72,7 +69,7 @@ def register_person(name: str) -> str:
     deadline = time.time() + 3
     while time.time() < deadline:
         if started_here:
-            e.step()  # no UI poll loop is running for us
+            e.step()
         time.sleep(0.03)
     ok = e.register(name)
     e.set_overlay("")
@@ -93,9 +90,6 @@ def get_face_info(name: str) -> str:
     return f"Name: {names[idx]}\nEncoding: {_db.encodings[idx].shape} vector"
 
 
-# ── Camera Tools ────────────────────────────────────────
-
-
 @server.tool(description="List available camera sources")
 def camera_list() -> str:
     cfg = config.load()
@@ -106,6 +100,7 @@ def camera_list() -> str:
         result.append(f"  [{i}] {c['name']} ({c['source']}){marker}")
     result.append("")
     result.append("Auto-detect USB cameras:")
+    import cv2
     for idx in range(5):
         cap = cv2.VideoCapture(idx, cv2.CAP_AVFOUNDATION)
         if cap.isOpened():
@@ -120,7 +115,7 @@ def camera_list() -> str:
     return "\n".join(result)
 
 
-@server.tool(description="Add a camera to the config (e.g. name='IP Cam', source='rtsp://...')")
+@server.tool(description="Add a camera to the config")
 def camera_add(name: str, source: str) -> str:
     cfg = config.load()
     cams = cfg.setdefault("cameras", [])
@@ -129,7 +124,7 @@ def camera_add(name: str, source: str) -> str:
     return f"Added camera '{name}' ({source})."
 
 
-@server.tool(description="Switch to a camera by its config index (see camera_list)")
+@server.tool(description="Switch to a camera by its config index")
 def camera_switch(index: int) -> str:
     global _poll_thread
     e = _get_engine()
@@ -203,8 +198,7 @@ def get_status() -> str:
     )
 
 
-@server.tool(description="List all faces currently visible, with track ID, "
-                         "identity, dwell time and blink count")
+@server.tool(description="List all faces currently visible")
 def get_live_faces() -> str:
     e = _get_engine()
     if not e.running:
@@ -220,8 +214,7 @@ def get_live_faces() -> str:
     return f"{len(faces)} face(s) in view:\n" + "\n".join(lines)
 
 
-@server.tool(description="Get expression/pose analysis of the primary face: "
-                         "emotion, smile, eye openness, attention, head pose")
+@server.tool(description="Get expression/pose analysis of the primary face")
 def get_face_analysis() -> str:
     e = _get_engine()
     if not e.running:
@@ -238,10 +231,9 @@ def get_face_analysis() -> str:
     )
 
 
-@server.tool(description="Show the presence history (who appeared/left, "
-                         "when, and for how long)")
+@server.tool(description="Show the presence history")
 def presence_history(limit: int = 30) -> str:
-    from facetrak.events import PresenceLog
+    from facetrak.storage.db import PresenceLog
     events = PresenceLog.tail(limit)
     if not events:
         return "No presence events recorded yet."
@@ -280,16 +272,13 @@ def toggle_blur() -> str:
     return f"Privacy blur {'on' if state else 'off'}."
 
 
-# ── Config Tools ────────────────────────────────────────
-
-
 @server.tool(description="Show current configuration")
 def get_config() -> str:
     cfg = config.load()
     return "\n".join(f"  {k}: {v}" for k, v in sorted(cfg.items()))
 
 
-@server.tool(description="Update a configuration value (e.g. detect_width, recog_threshold)")
+@server.tool(description="Update a configuration value")
 def update_config(key: str, value: str) -> str:
     cfg = config.load()
     if key not in cfg and not any(
@@ -325,9 +314,6 @@ def update_config(key: str, value: str) -> str:
 def reset_config() -> str:
     config.save(config.DEFAULT_CONFIG)
     return "Config reset to defaults."
-
-
-# ── Servo Tools ─────────────────────────────────────────
 
 
 @server.tool(description="List available serial ports for servo connection")
@@ -376,8 +362,7 @@ def servo_set_angle(pan: int, tilt: int) -> str:
     return f"Pan: {actual_pan:.0f}, Tilt: {actual_tilt:.0f}"
 
 
-@server.tool(description="Get gaze direction for the primary face "
-                         "(gaze_h -1=left 1=right, gaze_v -1=up 1=down, label)")
+@server.tool(description="Get gaze direction for the primary face")
 def get_gaze() -> str:
     e = _get_engine()
     if not e.running:
@@ -401,10 +386,9 @@ def get_age_gender() -> str:
         for f in faces)
 
 
-@server.tool(description="Get crowd statistics for this session "
-                         "(peak, average, total appearances)")
+@server.tool(description="Get crowd statistics for this session")
 def get_crowd_stats() -> str:
-    from facetrak import db as _db
+    from facetrak.storage import db as _db
     s = _db.crowd_summary()
     return (f"Peak simultaneous: {s['peak']}\n"
             f"Average: {s['avg']}\n"
@@ -432,8 +416,7 @@ def toggle_heatmap() -> str:
     return f"Heatmap {'on' if state else 'off'}."
 
 
-@server.tool(description="Set which face the servo follows: "
-                         "'largest', 'known', or 'unknown'")
+@server.tool(description="Set which face the servo follows")
 def set_servo_target(mode: str) -> str:
     e = _get_engine()
     try:
@@ -443,8 +426,7 @@ def set_servo_target(mode: str) -> str:
         return f"Invalid mode '{mode}'. Choose: largest, known, unknown."
 
 
-@server.tool(description="Blur (or un-blur) a specific registered person "
-                         "even when they are recognised")
+@server.tool(description="Blur (or un-blur) a specific registered person")
 def set_person_blur(name: str, blur: bool) -> str:
     e = _get_engine()
     e.set_blur_person(name, blur)
@@ -459,7 +441,7 @@ def get_face_quality() -> str:
     faces = e.live_faces()
     if not faces:
         return "No faces in view."
-    from facetrak.quality import label as qlabel
+    from facetrak.recog.quality import label as qlabel
     return "\n".join(
         f"  #{f['id']} {f['name']}: {f['quality']:.2f} ({qlabel(f['quality'])})"
         for f in faces)
@@ -467,3 +449,6 @@ def get_face_quality() -> str:
 
 def run():
     server.run(transport="stdio")
+
+if __name__ == "__main__":
+    run()

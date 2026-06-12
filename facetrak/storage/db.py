@@ -1,4 +1,3 @@
-"""SQLite persistence: presence events, emotion log, crowd samples."""
 import datetime
 import sqlite3
 from contextlib import contextmanager
@@ -120,3 +119,19 @@ def crowd_summary() -> dict:
         "avg": round(row["avg"], 2),
         "total_appearances": appearances,
     }
+
+
+# ── PresenceLog (formerly events.py) ──
+
+class PresenceLog:
+    def appeared(self, name: str | None, track_id: int):
+        log_presence("appeared", name or "unknown", track_id)
+
+    def left(self, name: str | None, track_id: int,
+             duration: float, blinks: int = 0):
+        log_presence("left", name or "unknown", track_id,
+                     round(duration, 1), blinks)
+
+    @staticmethod
+    def tail(limit: int = 50) -> list[dict]:
+        return query_presence(limit)

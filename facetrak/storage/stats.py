@@ -1,8 +1,3 @@
-"""Rolling emotion + expression timeline backed by SQLite.
-
-Writes one row per second per tracked face. Provides frequency counts
-for the UI sparkline and CSV export for external analysis.
-"""
 import csv
 import time
 from collections import Counter
@@ -10,13 +5,12 @@ from pathlib import Path
 
 from . import db
 
-_RECORD_INTERVAL = 1.0   # seconds between DB writes per track
+_RECORD_INTERVAL = 1.0
 
 
 class EmotionTimeline:
     def __init__(self):
-        self._last_write: dict[int, float] = {}   # track_id → monotonic time
-        # in-memory ring for fast sparkline queries (≤300 entries)
+        self._last_write: dict[int, float] = {}
         self._recent: list[dict] = []
         self._max_recent = 300
 

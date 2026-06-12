@@ -11,7 +11,6 @@ class Notifier:
             return
         self._notified.add(name)
         ts = datetime.datetime.now().strftime("%H:%M:%S")
-        # Escape for the AppleScript string literal — name is user-supplied.
         safe = name.replace("\\", "\\\\").replace('"', '\\"')
         try:
             subprocess.run([

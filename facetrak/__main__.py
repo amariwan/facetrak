@@ -1,7 +1,7 @@
 import logging
 import tkinter as tk
 
-from .ui import MainWindow
+from .viz.ui import MainWindow
 
 
 def main():

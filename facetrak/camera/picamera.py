@@ -59,8 +59,8 @@ class PiCamera(CameraSource):
         try:
             self._cam.stop()
             self._cam.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("PiCamera release error: %s", exc)
 
     @property
     def name(self) -> str:

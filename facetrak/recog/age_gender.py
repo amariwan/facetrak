@@ -1,12 +1,3 @@
-"""Age and gender estimation via OpenCV DNN (Levi & Hassner Caffe models).
-
-~44 MB per caffemodel; both are downloaded lazily on first call.
-If download fails or the net errors, the module self-disables and returns "?"
-so the rest of the pipeline continues unaffected.
-
-Results are cached per Track for _CACHE_FRAMES frames to avoid re-running
-inference on every frame.
-"""
 import logging
 import urllib.error
 import urllib.request
@@ -21,7 +12,6 @@ _BASE = "https://raw.githubusercontent.com/spmallick/learnopencv/master/AgeGende
 _AGE_PROTO_URL    = f"{_BASE}/age_deploy.prototxt"
 _GENDER_PROTO_URL = f"{_BASE}/gender_deploy.prototxt"
 
-# caffemodel mirrors — tried in order; first success wins
 _AGE_MODEL_URLS = [
     "https://github.com/smahesh29/Gender-and-Age-Detection/raw/master/age_net.caffemodel",
     "https://storage.googleapis.com/learnopencv2/age_net.caffemodel",
@@ -42,7 +32,6 @@ _MEAN        = (78.4263377603, 87.7689143744, 114.895847746)
 
 
 def _fetch(path: Path, urls: list[str]) -> bool:
-    """Try each URL in order; return True if the file was obtained."""
     if path.exists():
         return True
     for url in urls:
@@ -94,7 +83,6 @@ class AgeGenderEstimator:
         return ok
 
     def predict(self, face_bgr: np.ndarray) -> tuple[str, str]:
-        """Return (age_range, gender) or ("?", "?") on failure/disabled."""
         if not self._ready or face_bgr.size == 0:
             return "?", "?"
         try:
@@ -105,5 +93,6 @@ class AgeGenderEstimator:
             self._age_net.setInput(blob)
             age = _AGE_BUCKETS[self._age_net.forward()[0].argmax()]
             return age, gender
-        except cv2.error:
+        except cv2.error as exc:
+            logger.debug("Age/gender inference failed: %s", exc)
             return "?", "?"

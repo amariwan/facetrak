@@ -9,7 +9,6 @@ from facetrak.camera.rtsp import RTSPCamera
 
 class TestFromConfig:
     def test_legacy_int_camera_key_returns_usb(self):
-        cfg = {"camera": 0}
         with patch.object(USBCamera, "__init__", return_value=None) as mock:
             mock.return_value = None
             cams = from_config({"camera": 0})

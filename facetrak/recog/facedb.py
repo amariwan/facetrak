@@ -1,16 +1,11 @@
-"""Face recognition database backed by OpenCV SFace embeddings.
-
-SFace produces 128-d unit embeddings from a 112x112 aligned crop; this is
-far more accurate and pose-robust than classic HOG matching. Per person we
-store a matrix of embeddings (one row per registration sample) and match a
-probe by mean of its top-k cosine similarities.
-"""
 import logging
 import urllib.request
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+from .yunet import YuNetDetector
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +18,6 @@ _MODEL_PATH = Path("face_recognition_sface.onnx")
 
 _MIN_SAMPLES = 3
 _TOP_K = 3
-# Cosine-similarity margin: best match must beat the runner-up clearly,
-# otherwise we report "unknown" rather than risk a misidentification.
 _AMBIGUITY_RATIO = 1.15
 
 
@@ -70,9 +63,7 @@ class FaceDatabase:
             self.encodings.append(data)
 
     def _migrate_image_samples(self, path: Path, images: np.ndarray
-                               ) -> np.ndarray | None:
-        """Convert legacy raw-image samples (N,H,W,3) to SFace embeddings."""
-        from .detection import YuNetDetector
+                                ) -> np.ndarray | None:
         logger.info("Migrating %s from image samples to SFace embeddings",
                     path.name)
         detector = YuNetDetector()
@@ -95,11 +86,6 @@ class FaceDatabase:
 
     def embed(self, frame: np.ndarray, det_row: np.ndarray
               ) -> np.ndarray | None:
-        """Aligned SFace embedding for one YuNet detection row.
-
-        `frame` must be the same image the detection ran on (coordinates
-        of `det_row` are interpreted relative to it).
-        """
         try:
             rec = self._ensure_recognizer()
             chip = rec.alignCrop(frame, det_row)
