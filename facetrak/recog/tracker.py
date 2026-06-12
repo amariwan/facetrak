@@ -1,3 +1,4 @@
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -27,6 +28,7 @@ class FaceTracker:
         self.tracks: list[Track] = []
         self._next_id = 1
         self._lost: list[_LostTrack] = []
+        self._id_lock = threading.Lock()
 
     def update(self, detections: list[FaceDetection]
                ) -> tuple[list[Track], list[Track]]:
@@ -57,9 +59,10 @@ class FaceTracker:
         self.tracks = [t for t in self.tracks if t.missed <= _MAX_MISSED]
 
         for det in unmatched:
-            new_id = self._next_id
+            with self._id_lock:
+                new_id = self._next_id
+                self._next_id += 1
             t = Track(track_id=new_id, det=det)
-            self._next_id += 1
             self.tracks.append(t)
 
         return self.active, ended

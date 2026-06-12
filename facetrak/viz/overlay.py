@@ -20,7 +20,7 @@ def draw_track(frame: np.ndarray, t: Track, frame_w: int, frame_h: int,
         or (known and blur_persons and t.name in blur_persons)
     )
     if should_blur and x2 > x1 and y2 > y1:
-        k = max(1, min(t.det.w, t.det.h) // 6) | 1
+        k = min(31, max(1, min(t.det.w, t.det.h) // 6) | 1)
         frame[y1:y2, x1:x2] = cv2.GaussianBlur(
             frame[y1:y2, x1:x2], (k, k), 0)
     color = _COLOR_KNOWN if known else _COLOR_UNKNOWN

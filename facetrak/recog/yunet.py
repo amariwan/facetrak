@@ -27,9 +27,13 @@ def ensure_model() -> Path:
 
 class YuNetDetector:
     def __init__(self):
-        self._net = cv2.FaceDetectorYN.create(
-            str(ensure_model()), "", (320, 320),
-            _SCORE_THRESHOLD, _NMS_THRESHOLD, _TOP_K)
+        try:
+            self._net = cv2.FaceDetectorYN.create(
+                str(ensure_model()), "", (320, 320),
+                _SCORE_THRESHOLD, _NMS_THRESHOLD, _TOP_K)
+        except Exception:
+            logger.error("YuNetDetector creation failed")
+            self._net = None
         self._input_size: tuple[int, int] | None = None
 
     def detect(self, frame: np.ndarray, scale: float = 1.0

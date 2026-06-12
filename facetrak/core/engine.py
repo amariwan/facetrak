@@ -209,11 +209,10 @@ class FaceEngine:
                 self.presence.appeared(t.name, t.track_id)
                 t.announced = True
         self._log_ended(ended)
-        self._identify(small, active, frame)
-        self._age_gender_update(small, active, frame)
-
         primary = self._select_servo_target(active)
         self._update_primary(frame, primary)
+        self._identify(small, active, frame)
+        self._age_gender_update(small, active, frame)
 
         if self.heatmap_enabled:
             centers = [t.det.center for t in active]
@@ -403,7 +402,7 @@ class FaceEngine:
                 "dwell_s":    round(t.dwell, 1),
                 "blinks":     t.blink_count,
                 "quality":    quality_score(
-                    np.zeros((64, 64, 3), np.uint8),
+                    frame[t.det.y:t.det.y+t.det.h, t.det.x:t.det.x+t.det.w],
                     self.metrics.yaw, self.metrics.pitch),
             }
             for t in self.tracker.active

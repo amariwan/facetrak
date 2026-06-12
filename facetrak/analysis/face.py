@@ -93,7 +93,11 @@ class FaceAnalyzer:
     def load_model(self, img_w: int, img_h: int):
         if not _MODEL_PATH.exists():
             logger.info("Downloading face landmarker model (~5MB)...")
-            urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+            try:
+                urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+            except Exception:
+                logger.warning("Face landmarker download failed")
+                return
         try:
             opts = vision.FaceLandmarkerOptions(
                 base_options=mp.tasks.BaseOptions(
@@ -150,7 +154,7 @@ class FaceAnalyzer:
         if len(lm0) >= 478:
             lh, lv = _eye_gaze(_L_IRIS, _L_OUT, _L_INN, _L_TOP, _L_BOT,
                                 lm0, rgb_frame.shape[1], rgb_frame.shape[0])
-            rh, rv = _eye_gaze(_R_IRIS, _R_INN, _R_OUT, _R_TOP, _R_BOT,
+            rh, rv = _eye_gaze(_R_IRIS, _R_OUT, _R_INN, _R_TOP, _R_BOT,
                                 lm0, rgb_frame.shape[1], rgb_frame.shape[0])
             rh = -rh
             m.gaze_h = round((lh + rh) / 2, 3)

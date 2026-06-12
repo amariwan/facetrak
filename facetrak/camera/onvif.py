@@ -30,7 +30,10 @@ class ONVIFPTZController(PTZController):
         self._cam = _ONVIFCamera(host, port, user, password)
         self._ptz = self._cam.create_ptz_service()
         self._media = self._cam.create_media_service()
-        profile = self._media.GetProfiles()[0]
+        profiles = self._media.GetProfiles()
+        if not profiles:
+            raise RuntimeError("ONVIF camera returned no media profiles")
+        profile = profiles[0]
         self._token = profile.token
         self._req_move = self._ptz.create_type("ContinuousMove")
         self._req_move.ProfileToken = self._token
@@ -63,7 +66,7 @@ class ONVIFPTZController(PTZController):
             req = self._ptz.create_type("Stop")
             req.ProfileToken = self._token
             req.PanTilt = True
-            req.Zoom    = False
+            req.Zoom    = True
             self._ptz.Stop(req)
         except Exception as exc:
             logger.warning("ONVIF stop error: %s", exc)

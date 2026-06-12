@@ -20,4 +20,4 @@ class FaceMetrics:
 
     @property
     def eyes_closed(self) -> bool:
-        return self.eye_left < 0.5 and self.eye_right < 0.5
+        return (self.eye_left + self.eye_right) / 2 < 0.5

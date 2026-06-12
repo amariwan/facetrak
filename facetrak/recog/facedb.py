@@ -9,6 +9,15 @@ from .yunet import YuNetDetector
 
 logger = logging.getLogger(__name__)
 
+_detector: YuNetDetector | None = None
+
+
+def _get_detector() -> YuNetDetector:
+    global _detector
+    if _detector is None:
+        _detector = YuNetDetector()
+    return _detector
+
 FACE_DIR = Path("faces") / "data"
 EMBED_DIM = 128
 
@@ -66,7 +75,7 @@ class FaceDatabase:
                                 ) -> np.ndarray | None:
         logger.info("Migrating %s from image samples to SFace embeddings",
                     path.name)
-        detector = YuNetDetector()
+        detector = _get_detector()
         feats = []
         for img in images:
             dets = detector.detect(np.ascontiguousarray(img))

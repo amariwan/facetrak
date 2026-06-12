@@ -25,7 +25,7 @@ class Track:
     gender: str = "?"
     embedding: np.ndarray | None = field(default=None, repr=False)
     _eyes_closed: bool = False
-    _votes: deque = field(default_factory=lambda: deque(maxlen=_VOTE_WINDOW))
+    _votes: deque = field(default_factory=lambda: deque(maxlen=_VOTE_WINDOW), repr=False)
 
     @property
     def bbox(self) -> tuple[int, int, int, int]:

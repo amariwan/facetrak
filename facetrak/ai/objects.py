@@ -95,13 +95,14 @@ class ObjectDetector:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         model_path = _CACHE_DIR / f"{size}.pt"
         try:
-            self._model = YOLO(str(model_path) if model_path.exists() else f"{size}.pt")
-            # move cached file to our cache dir if ultralytics downloaded it
             if not model_path.exists():
+                self._model = YOLO(f"{size}.pt")
                 import shutil
-                default = Path(f"{size}.pt")
-                if default.exists():
-                    shutil.move(str(default), str(model_path))
+                cached = Path.home() / ".cache" / "ultralytics" / "models" / f"{size}.pt"
+                if cached.exists():
+                    shutil.copy2(str(cached), str(model_path))
+            else:
+                self._model = YOLO(str(model_path))
             self._enabled = True
             logger.info("ObjectDetector loaded: %s", size)
             return True
@@ -131,7 +132,7 @@ class ObjectDetector:
                 cls_id = int(box.cls[0])
                 if cls_id in self._skip:
                     continue
-                x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                x1, y1, x2, y2 = (int(round(v)) for v in box.xyxy[0])
                 detections.append(Detection(
                     label=r.names[cls_id],
                     confidence=float(box.conf[0]),

@@ -50,9 +50,11 @@ def _finger_extended(landmarks, tip_idx: int, pip_idx: int,
     tip = landmarks[tip_idx]
     pip = landmarks[pip_idx]
     if is_thumb:
-        # thumb extends horizontally — compare x
+        # thumb extends — Euclidean distance from MCP
         mcp = landmarks[2]
-        return abs(tip.x - mcp.x) > abs(pip.x - mcp.x)
+        d_tip = (tip.x - mcp.x)**2 + (tip.y - mcp.y)**2
+        d_pip = (pip.x - mcp.x)**2 + (pip.y - mcp.y)**2
+        return d_tip > d_pip
     return tip.y < pip.y  # y decreases upward in normalised coords
 
 
@@ -87,12 +89,11 @@ def _classify(landmarks) -> Gesture:
         return Gesture.POINT
 
     # OK: thumb tip close to index tip
-    if thumb:
-        dx = landmarks[4].x - landmarks[8].x
-        dy = landmarks[4].y - landmarks[8].y
-        dist = (dx**2 + dy**2) ** 0.5
-        if dist < 0.08:
-            return Gesture.OK
+    dx = landmarks[4].x - landmarks[8].x
+    dy = landmarks[4].y - landmarks[8].y
+    dist = (dx**2 + dy**2) ** 0.5
+    if dist < 0.08:
+        return Gesture.OK
 
     return Gesture.UNKNOWN
 

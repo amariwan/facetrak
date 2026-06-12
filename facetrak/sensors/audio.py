@@ -120,7 +120,11 @@ class AudioMonitor:
                 dtype="int16",
             ) as stream:
                 while not self._stop.is_set():
-                    block, _ = stream.read(_BLOCK_SIZE)
+                    block, overflow = stream.read(_BLOCK_SIZE)
+                    if overflow:
+                        logger.debug("Audio overflow detected")
+                    if len(block) < _BLOCK_SIZE:
+                        continue
                     self._process(block[:, 0])
         except Exception as exc:
             logger.error("AudioMonitor stream error: %s", exc)

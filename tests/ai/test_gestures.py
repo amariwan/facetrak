@@ -30,7 +30,7 @@ def _make_hand(finger_states: list[bool], thumb_up: bool = True):
     else:
         lms[2].x, lms[2].y = 0.5, 0.7
         lms[3].x, lms[3].y = 0.5, 0.65
-        lms[4].x, lms[4].y = 0.5, 0.6
+        lms[4].x, lms[4].y = 0.5, 0.68  # tip closer to mcp (curled inward)
 
     # index=8/6, middle=12/10, ring=16/14, pinky=20/18
     tip_idxs = [8, 12, 16, 20]

@@ -72,7 +72,10 @@ class RTSPCamera(CameraSource):
                         self._queue.get_nowait()
                     except queue.Empty:
                         pass
-                self._queue.put_nowait(frame)
+                try:
+                    self._queue.put_nowait(frame)
+                except queue.Full:
+                    pass
 
             cap.release()
 

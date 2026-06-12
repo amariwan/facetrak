@@ -9,6 +9,8 @@ def score(face_bgr: np.ndarray, yaw: float = 0.0,
     if face_bgr.size == 0:
         return 0.0
     gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
+    if gray.shape[0] < 3 or gray.shape[1] < 3:
+        return 0.0
 
     sharpness = min(cv2.Laplacian(gray, cv2.CV_64F).var(), 200.0) / 200.0
 

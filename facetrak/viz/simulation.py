@@ -56,8 +56,12 @@ class SimulationWindow:
         return self.cx + x * scale, self.cy - y * scale
 
     def _poll(self):
-        pan, tilt = self.get_angles()
-        self._draw_scene(pan, tilt)
+        try:
+            pan, tilt = self.get_angles()
+            self._draw_scene(pan, tilt)
+        except Exception:
+            import traceback
+            traceback.print_exc()
         self._anim_id = self.win.after(30, self._poll)
 
     def close(self):
@@ -160,7 +164,11 @@ class SimulationWindow:
 
     def _draw_arc(self, x, y, z, radius, pan_angle, color):
         pts = []
-        for a in range(0, int(pan_angle) if pan_angle > 0 else 360 + int(pan_angle), 5):
+        if pan_angle >= 0:
+            angles = range(0, int(pan_angle), 5)
+        else:
+            angles = range(360 + int(pan_angle), 360, 5)
+        for a in angles:
             rad = math.radians(a)
             px, py, pz = x - math.sin(rad) * radius, y, z + math.cos(rad) * radius
             pts.append(self._project(px, py, pz))

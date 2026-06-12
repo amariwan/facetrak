@@ -89,9 +89,15 @@ class AgeGenderEstimator:
             blob = cv2.dnn.blobFromImage(
                 face_bgr, 1.0, (227, 227), _MEAN, swapRB=False)
             self._gender_net.setInput(blob)
-            gender = _GENDERS[self._gender_net.forward()[0].argmax()]
+            gender_out = self._gender_net.forward()
+            if gender_out is None or len(gender_out) == 0 or len(gender_out[0]) == 0:
+                return "?", "?"
+            gender = _GENDERS[gender_out[0].argmax()]
             self._age_net.setInput(blob)
-            age = _AGE_BUCKETS[self._age_net.forward()[0].argmax()]
+            age_out = self._age_net.forward()
+            if age_out is None or len(age_out) == 0 or len(age_out[0]) == 0:
+                return "?", "?"
+            age = _AGE_BUCKETS[age_out[0].argmax()]
             return age, gender
         except cv2.error as exc:
             logger.debug("Age/gender inference failed: %s", exc)

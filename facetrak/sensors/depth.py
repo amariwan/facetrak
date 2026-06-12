@@ -105,6 +105,10 @@ class DepthEstimator:
             raw = self._net.forward()          # shape: (1, 1, H, W) or (1, H, W)
             depth = raw.squeeze()
 
+            # clip extreme edge artifacts before normalization
+            low, high = np.percentile(depth, [1, 99])
+            depth = np.clip(depth, low, high)
+
             # invert: MiDaS output is inverse depth (larger = closer)
             depth = 1.0 - (depth - depth.min()) / (depth.max() - depth.min() + 1e-8)
 

@@ -55,6 +55,7 @@ class PIRSensor:
         self._last_time = 0.0
         self._events: list[MotionEvent] = []
         self._lock = threading.Lock()
+        self._shutdown = False
 
     def start(self) -> bool:
         try:
@@ -84,6 +85,8 @@ class PIRSensor:
             return False
 
     def _on_gpio(self, channel: int) -> None:
+        if self._shutdown:
+            return
         now = time.time()
         if now - self._last_time < self._debounce:
             return
@@ -113,6 +116,7 @@ class PIRSensor:
         return self._enabled
 
     def stop(self) -> None:
+        self._shutdown = True
         if self._gpio and self._enabled:
             try:
                 self._gpio.remove_event_detect(self._pin)
