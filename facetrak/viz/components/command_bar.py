@@ -103,6 +103,7 @@ class CommandBar(tk.Frame):
             (f"{T.ICON_BLUR} Blur",    "toggle_blur"),
             (f"{T.ICON_HEAT} Heatmap", "toggle_heatmap"),
             (f"{T.ICON_SERVO} Servo",  "toggle_servo"),
+            (f"{T.ICON_MIRROR} Mirror","toggle_mirror"),
         ]:
             cb = self._make_check(self, label, self._cb[key])
             cb.grid(row=0, column=col, **pad); col += 1

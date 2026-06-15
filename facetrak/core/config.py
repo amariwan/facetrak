@@ -40,6 +40,7 @@ DEFAULT_CONFIG = {
     "pir_enabled": False,
     "pir_gpio_pin": 17,
     "depth_enabled": False,
+    "mirror": False,
 }
 
 

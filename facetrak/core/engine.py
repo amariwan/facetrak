@@ -198,6 +198,8 @@ class FaceEngine:
         ret, frame = self.cam.read()
         if not ret:
             return None
+        if self.cfg.get("mirror", False):
+            frame = cv2.flip(frame, 1)
         self._frame_no += 1
 
         small, scale = self._downscale(frame)
@@ -433,6 +435,12 @@ class FaceEngine:
             self.heatmap.reset()
         cfgmod.save(self.cfg)
         return self.heatmap_enabled
+
+    def toggle_mirror(self) -> bool:
+        val = not self.cfg.get("mirror", False)
+        self.cfg["mirror"] = val
+        cfgmod.save(self.cfg)
+        return val
 
     def set_blur_person(self, name: str, blur: bool):
         if blur:

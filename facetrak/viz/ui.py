@@ -66,6 +66,7 @@ class MainWindow:
             "toggle_blur":     self._toggle_blur,
             "toggle_heatmap":  self._toggle_heatmap,
             "toggle_servo":    self._toggle_servo,
+            "toggle_mirror":   self._toggle_mirror,
             "register_dialog": self._register_dialog,
             "list_faces":      self._list_faces,
             "set_servo_target": self.eng.set_servo_target,
@@ -198,6 +199,7 @@ class MainWindow:
     def _toggle_blur(self):     self.eng.toggle_blur()
     def _toggle_heatmap(self):  self.eng.toggle_heatmap()
     def _toggle_servo(self):    self.eng.toggle_servo()
+    def _toggle_mirror(self):   self.eng.toggle_mirror()
 
     # ── Registration ─────────────────────────────────────────────────────────
 
