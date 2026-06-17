@@ -61,12 +61,77 @@ just sim
 - Python ≥ 3.11
 - macOS (for GUI and notifications)
 - Arduino + servos (optional, for physical tracking)
-- Raspberry Pi (optional, for PIR sensor, Pi Camera)
+- Raspberry Pi (for PIR sensor, Pi Camera, headless operation)
 - Webcam, RTSP camera, or ONVIF PTZ camera
 
 Model files are auto-downloaded on first run (~350 KB YuNet, ~37 MB SFace, ~5 MB FaceLandmarker, ~70 MB MediaPipe models).
 
 Optional extras: `pip install -e ".[full]"` for all hardware (Linux) and AI extras.
+
+## Raspberry Pi Setup
+
+### System dependencies
+
+```bash
+sudo apt update && sudo apt install -y \
+  python3-pip python3-venv python3-dev \
+  libatlas-base-dev libhdf5-dev libhdf5-serial-dev \
+  libqt5gui5 libqt5test5 qtbase5-dev \
+  libilmbase-dev libopenexr-dev libgstreamer1.0-dev \
+  libjpeg-dev libtiff-dev libwebp-dev ffmpeg
+```
+
+### Install
+
+```bash
+git clone <repo-url> facetrak
+cd facetrak
+
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Base install
+pip install --upgrade pip
+pip install -e .
+
+# With Pi Camera support
+pip install -e ".[pi]"
+
+# Everything (Pi Camera, YOLO, audio, hardware)
+pip install -e ".[full]"
+```
+
+### Camera config
+
+Edit `config.json`:
+- **Pi Camera Module:** `"cameras": [{"type": "pi"}]`
+- **USB webcam:** `"cameras": [{"type": "usb", "index": 0}]`
+
+### Running headless (SSH)
+
+The Tkinter GUI requires a desktop environment. Over SSH, use:
+
+```bash
+# REST API (default port 8765)
+facetrak-api
+
+# MCP server (stdio, for LLM agents)
+facetrak-mcp
+```
+
+### Performance tuning
+
+On a Pi 4 / Pi 5 with limited resources, set `detect_width` to `320` in `config.json` for higher frame rates. If using 4 GB RAM or less, increase swap:
+
+```bash
+sudo dphys-swapfile swapoff
+echo 'CONF_SWAPSIZE=2048' | sudo tee -a /etc/dphys-swapfile
+sudo dphys-swapfile setup && sudo dphys-swapfile swapon
+```
+
+### Arduino (optional)
+
+Flash `facetracker.ino` to your Arduino, connect it via USB, and set `servo.port` (e.g. `"/dev/ttyACM0"`) in `config.json`.
 
 ## Commands
 
