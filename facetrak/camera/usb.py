@@ -28,12 +28,17 @@ class USBCamera(CameraSource):
     def _open(index: int) -> cv2.VideoCapture:
         cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
         if not cap.isOpened():
+            cap.release()
             cap = cv2.VideoCapture(index)
         return cap
 
     def read(self) -> tuple[bool, np.ndarray | None]:
         ret, frame = self._cap.read()
-        return ret, frame if ret else None
+        if ret and frame is not None:
+            self.health.ok()
+            return True, frame
+        self.health.fail("usb read failed")
+        return False, None
 
     def release(self) -> None:
         if self._cap.isOpened():
@@ -56,8 +61,8 @@ class USBCamera(CameraSource):
         """Return list of available USB camera indices."""
         available = []
         for i in range(max_index):
-            cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)
+            cap = cls._open(i)
             if cap.isOpened():
                 available.append(i)
-                cap.release()
+            cap.release()
         return available

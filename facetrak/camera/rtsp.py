@@ -7,6 +7,8 @@ import time
 import cv2
 import numpy as np
 
+from facetrak.core.security import redact_url
+
 from .base import CameraSource
 
 logger = logging.getLogger(__name__)
@@ -53,19 +55,28 @@ class RTSPCamera(CameraSource):
             cap = self._open_cap()
             if cap is None:
                 wait = _RECONNECT_DELAYS[min(delay_idx, len(_RECONNECT_DELAYS) - 1)]
-                logger.warning("RTSP connect failed (%s), retry in %ds", self._url, wait)
+                self.health.fail("rtsp connect failed")
+                logger.warning("RTSP connect failed (%s), retry in %ds",
+                               redact_url(self._url), wait)
                 self._stop_event.wait(wait)
                 delay_idx += 1
                 continue
 
-            logger.info("RTSP connected: %s", self._url)
+            logger.info("RTSP connected: %s", redact_url(self._url))
+            if delay_idx:
+                self.health.reconnected()
+            else:
+                self.health.connected = True
             delay_idx = 0
 
             while not self._stop_event.is_set():
                 ret, frame = cap.read()
                 if not ret:
-                    logger.warning("RTSP stream lost: %s", self._url)
+                    self.health.fail("rtsp stream lost")
+                    logger.warning("RTSP stream lost: %s",
+                                   redact_url(self._url))
                     break
+                self.health.ok()
                 # drop oldest frame if queue is full
                 if self._queue.full():
                     try:

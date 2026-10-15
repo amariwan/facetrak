@@ -1,31 +1,44 @@
 import datetime
 import logging
+import time
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from . import config as cfgmod
-from facetrak.recog import (
-    YuNetDetector, FaceTracker, FaceDatabase,
-    quality_score, GOOD_THRESHOLD,
-    AgeGenderEstimator,
-)
+from facetrak.ai import GestureDetector, ObjectDetector, PoseEstimator
 from facetrak.analysis import FaceAnalyzer, LivenessChecker
-from facetrak.viz.overlay import draw_overlay
-from facetrak.viz.heatmap import FaceHeatmap
-from facetrak.storage import (
-    init as db_init,
-    PresenceLog, CrowdMonitor, EmotionTimeline,
-)
-from facetrak.hardware.servo import PanTiltController
+from facetrak.camera import CameraSource
+from facetrak.camera import from_config as cameras_from_config
+from facetrak.events import ZoneManager, load_masks
 from facetrak.hardware.recorder import VideoRecorder
-from facetrak.camera import CameraSource, from_config as cameras_from_config
-from facetrak.ai import ObjectDetector, PoseEstimator, GestureDetector
-from facetrak.sensors import AudioMonitor, PIRSensor, DepthEstimator
-from facetrak.utils.notifier import Notifier
+from facetrak.hardware.servo import PanTiltController
+from facetrak.integrations.mqtt import MQTTPublisher
 from facetrak.models import FaceMetrics
 from facetrak.models.track import Track
+from facetrak.recog import (
+    GOOD_THRESHOLD,
+    AgeGenderEstimator,
+    FaceDatabase,
+    FaceTracker,
+    YuNetDetector,
+    quality_score,
+)
+from facetrak.sensors import AudioMonitor, DepthEstimator, PIRSensor
+from facetrak.storage import (
+    CrowdMonitor,
+    EmotionTimeline,
+    PresenceLog,
+)
+from facetrak.storage import db as dbmod
+from facetrak.storage import (
+    init as db_init,
+)
+from facetrak.utils.notifier import Notifier
+from facetrak.viz.heatmap import FaceHeatmap
+from facetrak.viz.overlay import draw_overlay
+
+from . import config as cfgmod
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +103,37 @@ class FaceEngine:
 
         threshold = self.cfg.get("recog_threshold", _DEFAULT_THRESHOLD)
         if threshold > 0.5:
+            logger.warning(
+                "recog_threshold %r out of range, resetting to %s",
+                threshold, _DEFAULT_THRESHOLD)
             threshold = _DEFAULT_THRESHOLD
             self.cfg["recog_threshold"] = threshold
         self.recog_threshold = threshold
+        try:
+            self._detect_every = max(
+                1, int(self.cfg.get("detect_every", 1)))
+        except (TypeError, ValueError):
+            self._detect_every = 1
+        self._last_detections: list = []
+
+        self.zones = ZoneManager.from_config(self.cfg)
+        self.masks = load_masks(self.cfg)
+        self.mqtt = MQTTPublisher(self.cfg)
+        self._subscribers: list = []
+        self._recent_events: list[dict] = []
+
+        self.perf = {
+            "frames": 0, "drops": 0,
+            "fps": 0.0, "step_ms": 0.0, "detect_ms": 0.0,
+        }
+        self._last_step_t: float | None = None
 
         self._frame: np.ndarray | None = None
-        self._detect_w  = self.cfg.get("detect_width", 480)
+        try:
+            self._detect_w = int(self.cfg.get("detect_width", 480))
+        except (TypeError, ValueError):
+            self._detect_w = 480
+        self._detect_w = max(160, min(1280, self._detect_w))
         self._frame_no  = 0
         self._age_cache: dict[int, tuple[str, str, int]] = {}
 
@@ -124,7 +162,15 @@ class FaceEngine:
             logger.error("Failed to open cameras: %s", exc)
             return False
 
-        idx = min(self.current_cam_idx, len(self.cameras) - 1)
+        if not self.cameras:
+            logger.error("No cameras configured")
+            return False
+        idx = self.current_cam_idx
+        if not isinstance(idx, int) or isinstance(idx, bool) \
+                or not 0 <= idx < len(self.cameras):
+            logger.error("Invalid camera index %r, falling back to 0", idx)
+            idx = 0
+            self.current_cam_idx = 0
         self.cam = self.cameras[idx]
 
         ok, probe = self.cam.read()
@@ -151,6 +197,8 @@ class FaceEngine:
             self.pir_sensor.start()
         if self.depth_enabled:
             self.depth_estimator.load()
+        if self.mqtt.enabled:
+            self.mqtt.start()
         self.running = True
         return True
 
@@ -186,6 +234,7 @@ class FaceEngine:
         self.gesture_detector.release()
         self.audio_monitor.stop()
         self.pir_sensor.stop()
+        self.mqtt.stop()
         if self.servo.connected:
             self.servo.disconnect()
         cfgmod.save(self.cfg)
@@ -195,15 +244,29 @@ class FaceEngine:
     def step(self) -> np.ndarray | None:
         if not self.running or self.cam is None:
             return None
+        t0 = time.monotonic()
         ret, frame = self.cam.read()
-        if not ret:
+        if not ret or frame is None:
+            self.perf["drops"] += 1
             return None
         if self.cfg.get("mirror", False):
             frame = cv2.flip(frame, 1)
         self._frame_no += 1
 
         small, scale = self._downscale(frame)
-        detections = self.detector.detect(small, scale=1.0 / scale)
+        for mask in self.masks:
+            mask.apply(small)
+        if self.detector is None or not self.detector.ready:
+            detections = list(self._last_detections)
+        elif self._detect_every > 1 and \
+                self._frame_no % self._detect_every != 0:
+            detections = list(self._last_detections)
+        else:
+            t_det = time.monotonic()
+            detections = self.detector.detect(small, scale=1.0 / scale)
+            self.perf["detect_ms"] = \
+                (time.monotonic() - t_det) * 1000.0
+            self._last_detections = detections
         active, ended = self.tracker.update(detections)
 
         for t in active:
@@ -211,6 +274,7 @@ class FaceEngine:
                 self.presence.appeared(t.name, t.track_id)
                 t.announced = True
         self._log_ended(ended)
+        self._process_zones(active, frame)
         primary = self._select_servo_target(active)
         self._update_primary(frame, primary)
         self._identify(small, active, frame)
@@ -275,6 +339,12 @@ class FaceEngine:
 
         self.recorder.write(frame)
         self._frame = frame
+        self.perf["frames"] += 1
+        dt = time.monotonic() - t0
+        self.perf["step_ms"] = dt * 1000.0
+        inst_fps = 1.0 / dt if dt > 0 else 0.0
+        self.perf["fps"] = (0.9 * self.perf["fps"] + 0.1 * inst_fps
+                            if self.perf["fps"] else inst_fps)
         return frame
 
     def _downscale(self, frame: np.ndarray) -> tuple[np.ndarray, float]:
@@ -349,11 +419,94 @@ class FaceEngine:
         for t in ended:
             self.presence.left(t.name, t.track_id, t.dwell, t.blink_count)
             self._age_cache.pop(t.track_id, None)
+            self.zones.forget_track(t.track_id)
+
+    def _process_zones(self, active: list, frame: np.ndarray):
+        if not self.zones.zones:
+            return
+        h, w = frame.shape[:2]
+        for t in active:
+            cx, cy = t.det.center
+            for ev in self.zones.update(t.track_id, cx / w, cy / h,
+                                        name=t.name):
+                self._emit_event(ev)
+
+    def _emit_event(self, ev: dict):
+        try:
+            dbmod.log_event(ev.get("kind", "event"), zone=ev.get("zone"),
+                            track_id=ev.get("track_id"), name=ev.get("name"))
+        except Exception as exc:
+            logger.warning("Could not persist event: %s", exc)
+        max_ev = self.cfg.get("events", {}).get("max_events", 1000)
+        try:
+            max_ev = max(1, int(max_ev))
+        except (TypeError, ValueError):
+            max_ev = 1000
+        self._recent_events.append(ev)
+        del self._recent_events[:-max_ev]
+        if self.mqtt.enabled:
+            payload = {"zone": ev.get("zone"),
+                       "track_id": ev.get("track_id")}
+            if self.mqtt.include_names:
+                payload["name"] = ev.get("name")
+            self.mqtt.publish(ev.get("kind", "event"), payload)
+        for sub in list(self._subscribers):
+            try:
+                sub(ev)
+            except Exception:
+                logger.debug("Event subscriber failed", exc_info=True)
+
+    # ── public event/perf/data API ──
+
+    def on_event(self, callback):
+        """Subscribe to zone/presence events (in-process fan-out)."""
+        self._subscribers.append(callback)
+        return callback
+
+    def recent_events(self, limit: int = 100) -> list[dict]:
+        return list(self._recent_events[-limit:])
+
+    @property
+    def current_frame(self) -> np.ndarray | None:
+        return self._frame
+
+    def perf_stats(self) -> dict:
+        stats = dict(self.perf)
+        stats["tracks"] = len(self.tracker.active)
+        stats["detector_ready"] = bool(
+            self.detector is not None and self.detector.ready)
+        if self.cam is not None:
+            stats["camera"] = self.cam.health.to_dict()
+        return stats
+
+    def purge_retention(self) -> dict:
+        days = self.cfg.get("retention_days", 30)
+        return dbmod.purge_older_than(days)
+
+    def delete_runtime_data(self, include_faces: bool = False) -> dict:
+        """Erase stored runtime data. Faces only with explicit consent."""
+        result = dbmod.delete_all()
+        if include_faces:
+            from facetrak.recog.facedb import FACE_DIR
+            removed = 0
+            for p in FACE_DIR.glob("*.npy"):
+                try:
+                    p.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+            result["face_files"] = removed
+            self.db.load()
+        return result
 
     def _update_primary(self, frame: np.ndarray, primary: Track | None):
         if primary is None:
             self.last_face_center = (0, 0)
             self.last_face_size   = (0, 0)
+            if self.servo_enabled:
+                moved = self.servo.note_target_lost()
+                if moved is not None:
+                    self.current_pan, self.current_tilt = moved
             return
         cx, cy = primary.det.center
         self.last_face_center = (cx, cy)
@@ -393,22 +546,34 @@ class FaceEngine:
         return str(Path(path).resolve())
 
     def live_faces(self) -> list[dict]:
-        return [
-            {
-                "id":         t.track_id,
-                "name":       t.name or "unknown",
-                "similarity": round(t.sim, 3),
-                "age":        t.age,
-                "gender":     t.gender,
-                "bbox":       t.bbox,
-                "dwell_s":    round(t.dwell, 1),
-                "blinks":     t.blink_count,
-                "quality":    quality_score(
-                    frame[t.det.y:t.det.y+t.det.h, t.det.x:t.det.x+t.det.w],
-                    self.metrics.yaw, self.metrics.pitch),
-            }
-            for t in self.tracker.active
-        ]
+        frame = self._frame
+        faces = []
+        for t in self.tracker.active:
+            q = 0.0
+            if frame is not None:
+                h, w = frame.shape[:2]
+                x1 = max(0, t.det.x)
+                y1 = max(0, t.det.y)
+                x2 = min(w, t.det.x + t.det.w)
+                y2 = min(h, t.det.y + t.det.h)
+                if x2 > x1 and y2 > y1:
+                    q = quality_score(
+                        frame[y1:y2, x1:x2],
+                        self.metrics.yaw, self.metrics.pitch)
+            faces.append(
+                {
+                    "id":         t.track_id,
+                    "name":       t.name or "unknown",
+                    "similarity": round(t.sim, 3),
+                    "age":        t.age,
+                    "gender":     t.gender,
+                    "bbox":       t.bbox,
+                    "dwell_s":    round(t.dwell, 1),
+                    "blinks":     t.blink_count,
+                    "quality":    q,
+                }
+            )
+        return faces
 
     def toggle_record(self):
         if self.recorder.recording:

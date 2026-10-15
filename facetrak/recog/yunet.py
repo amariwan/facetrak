@@ -36,8 +36,14 @@ class YuNetDetector:
             self._net = None
         self._input_size: tuple[int, int] | None = None
 
+    @property
+    def ready(self) -> bool:
+        return self._net is not None
+
     def detect(self, frame: np.ndarray, scale: float = 1.0
                ) -> list[FaceDetection]:
+        if self._net is None:
+            return []
         h, w = frame.shape[:2]
         if self._input_size != (w, h):
             self._net.setInputSize((w, h))
