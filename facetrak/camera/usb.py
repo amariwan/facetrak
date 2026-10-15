@@ -4,6 +4,8 @@ import logging
 import cv2
 import numpy as np
 
+from facetrak.platform import cv_backend
+
 from .base import CameraSource
 
 logger = logging.getLogger(__name__)
@@ -26,11 +28,10 @@ class USBCamera(CameraSource):
 
     @staticmethod
     def _open(index: int) -> cv2.VideoCapture:
-        cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
-        if not cap.isOpened():
-            cap.release()
-            cap = cv2.VideoCapture(index)
-        return cap
+        backend = cv_backend()
+        if backend is not None:
+            return cv2.VideoCapture(index, backend)
+        return cv2.VideoCapture(index)
 
     def read(self) -> tuple[bool, np.ndarray | None]:
         ret, frame = self._cap.read()

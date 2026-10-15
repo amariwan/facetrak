@@ -1,21 +1,23 @@
 import datetime
 import logging
 import time
-from pathlib import Path
 
 import cv2
 import numpy as np
 
 from facetrak.ai import GestureDetector, ObjectDetector, PoseEstimator
-from facetrak.analysis import FaceAnalyzer, LivenessChecker
+from facetrak.analysis import FaceAnalyzer  # None when MediaPipe missing
+from facetrak.analysis.liveness import LivenessChecker
 from facetrak.camera import CameraSource
 from facetrak.camera import from_config as cameras_from_config
+from facetrak.core.paths import data_dir
 from facetrak.events import ZoneManager, load_masks
 from facetrak.hardware.recorder import VideoRecorder
 from facetrak.hardware.servo import PanTiltController
 from facetrak.integrations.mqtt import MQTTPublisher
 from facetrak.models import FaceMetrics
 from facetrak.models.track import Track
+from facetrak.platform.resources import ResourceGuard
 from facetrak.recog import (
     GOOD_THRESHOLD,
     AgeGenderEstimator,
@@ -60,7 +62,7 @@ class FaceEngine:
 
         self.db          = FaceDatabase()
         self.servo       = PanTiltController(self.cfg)
-        self.analyzer    = FaceAnalyzer()
+        self.analyzer    = FaceAnalyzer() if FaceAnalyzer else None
         self.recorder    = VideoRecorder()
         self.notifier    = Notifier()
         self.tracker     = FaceTracker()
@@ -114,7 +116,16 @@ class FaceEngine:
                 1, int(self.cfg.get("detect_every", 1)))
         except (TypeError, ValueError):
             self._detect_every = 1
+        self._detect_adaptive = bool(self.cfg.get("detect_adaptive", True))
+        try:
+            self._detect_target_ms = float(
+                self.cfg.get("detect_target_ms", 33.0))
+        except (TypeError, ValueError):
+            self._detect_target_ms = 33.0
+        self._step_ema_ms = 0.0
         self._last_detections: list = []
+        self.resources = ResourceGuard(
+            self.cfg.get("resources", {}).get("max_memory_mb", 0))
 
         self.zones = ZoneManager.from_config(self.cfg)
         self.masks = load_masks(self.cfg)
@@ -182,7 +193,8 @@ class FaceEngine:
         if self.detector is None:
             self.detector = YuNetDetector()
         self.db.load()
-        self.analyzer.load_model(w, h)
+        if self.analyzer is not None:
+            self.analyzer.load_model(w, h)
         self.age_gender.load()
         self.tracker.reset()
         if self.objects_enabled:
@@ -345,7 +357,28 @@ class FaceEngine:
         inst_fps = 1.0 / dt if dt > 0 else 0.0
         self.perf["fps"] = (0.9 * self.perf["fps"] + 0.1 * inst_fps
                             if self.perf["fps"] else inst_fps)
+        self._adapt_detection(dt * 1000.0)
+        if self.perf["frames"] % 300 == 0:
+            self.perf["resources"] = self.resources.check()
         return frame
+
+    def _adapt_detection(self, step_ms: float):
+        """Bounded adaptive inference frequency (Pi optimization)."""
+        ema = self._step_ema_ms
+        self._step_ema_ms = (0.9 * ema + 0.1 * step_ms) if ema else step_ms
+        if not self._detect_adaptive or self.perf["frames"] % 30:
+            return
+        if self._step_ema_ms > self._detect_target_ms and \
+                self._detect_every < 4:
+            self._detect_every += 1
+            logger.info("Adaptive detection: every %d frames (EMA %.0f ms)",
+                        self._detect_every, self._step_ema_ms)
+        elif self._step_ema_ms < self._detect_target_ms * 0.55 and \
+                self._detect_every > 1:
+            self._detect_every -= 1
+            logger.info("Adaptive detection: every %d frames (EMA %.0f ms)",
+                        self._detect_every, self._step_ema_ms)
+        self.perf["detect_every"] = self._detect_every
 
     def _downscale(self, frame: np.ndarray) -> tuple[np.ndarray, float]:
         h, w = frame.shape[:2]
@@ -473,6 +506,7 @@ class FaceEngine:
     def perf_stats(self) -> dict:
         stats = dict(self.perf)
         stats["tracks"] = len(self.tracker.active)
+        stats["detect_every"] = self._detect_every
         stats["detector_ready"] = bool(
             self.detector is not None and self.detector.ready)
         if self.cam is not None:
@@ -515,9 +549,10 @@ class FaceEngine:
         if self.servo_enabled:
             self.current_pan, self.current_tilt = self.servo.update(
                 cx - w // 2, cy - h // 2, w, h)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        self.metrics = self.analyzer.analyze(rgb)
-        primary.update_blink(self.metrics.eyes_closed)
+        if self.analyzer is not None:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            self.metrics = self.analyzer.analyze(rgb)
+            primary.update_blink(self.metrics.eyes_closed)
 
     # ── commands ─────────────────────────────────────────
 
@@ -541,9 +576,9 @@ class FaceEngine:
         if self._frame is None:
             return None
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = f"snapshot_{ts}.png"
-        cv2.imwrite(path, self._frame)
-        return str(Path(path).resolve())
+        path = data_dir(self.cfg) / f"snapshot_{ts}.png"
+        cv2.imwrite(str(path), self._frame)
+        return str(path.resolve())
 
     def live_faces(self) -> list[dict]:
         frame = self._frame
@@ -678,10 +713,11 @@ class FaceEngine:
         return self.gestures_enabled
 
     def export_crowd_csv(self) -> str:
-        return self.crowd.export_csv()
+        return self.crowd.export_csv(data_dir(self.cfg) / "crowd_stats.csv")
 
     def export_emotion_csv(self) -> str:
-        return EmotionTimeline.export_csv()
+        return EmotionTimeline.export_csv(
+            data_dir(self.cfg) / "emotion_log.csv")
 
     @property
     def current_yaw(self) -> float:

@@ -1,6 +1,7 @@
+import datetime
 import logging
 import subprocess
-import datetime
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,8 @@ class Notifier:
         if name in self._notified:
             return
         self._notified.add(name)
+        if sys.platform != "darwin":
+            return  # desktop notifications are macOS-only; Linux is headless
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         safe = name.replace("\\", "\\\\").replace('"', '""')
         try:

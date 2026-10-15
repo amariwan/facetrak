@@ -60,7 +60,6 @@ def forget_person(name: str, confirm: bool = False) -> str:
     refused = _need_confirm(confirm)
     if refused:
         return refused
-    from pathlib import Path
 
     from facetrak.recog.facedb import FACE_DIR, sanitize_name
     stem = sanitize_name(name)
@@ -122,8 +121,12 @@ def camera_list() -> str:
     result.append("")
     result.append("Auto-detect USB cameras:")
     import cv2
+
+    from facetrak.platform import cv_backend
+    backend = cv_backend()
     for idx in range(5):
-        cap = cv2.VideoCapture(idx, cv2.CAP_AVFOUNDATION)
+        cap = (cv2.VideoCapture(idx, backend) if backend is not None
+               else cv2.VideoCapture(idx))
         if cap.isOpened():
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
