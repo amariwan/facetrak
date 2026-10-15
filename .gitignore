@@ -22,3 +22,7 @@ face_recognition_sface.onnx
 face_detection_yunet.onnx
 .env
 .config.*.tmp
+
+# web dashboard
+web/node_modules/
+web/dist/

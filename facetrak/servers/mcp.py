@@ -487,6 +487,80 @@ def get_face_quality() -> str:
         for f in faces)
 
 
+# ── F36 MCP expansion (read-only defaults; sensitive = confirm) ──
+
+@server.tool(description="Device status: platform, board, accelerators, runtimes")
+def device_status() -> str:
+    from facetrak.device.management import discover_hardware
+    from facetrak.core import config as _cfg
+    import json
+    return json.dumps(discover_hardware(_cfg.load()), indent=1)[:4000]
+
+
+@server.tool(description="Camera diagnostics: health, failover, thermal")
+def camera_diagnostics() -> str:
+    e = _get_engine()
+    import json
+    out = {"running": e.running}
+    if e.running and e.cam is not None:
+        out["health"] = e.cam.health.to_dict()
+    from facetrak.device.management import ThermalGovernor
+    out["thermal"] = ThermalGovernor().evaluate()
+    return json.dumps(out, indent=1)[:4000]
+
+
+@server.tool(description="Model registry: list local models")
+def model_registry(task: str = "") -> str:
+    from facetrak.vision.models import ModelRegistry
+    import json
+    return json.dumps(ModelRegistry().list(task or None), indent=1)[:4000]
+
+
+@server.tool(description="Inference backends and availability")
+def backend_status() -> str:
+    from facetrak.vision.models import BackendManager
+    import json
+    return json.dumps(BackendManager().capabilities(), indent=1)[:4000]
+
+
+@server.tool(description="Run a quick CPU benchmark (synthetic, labeled)")
+def quick_benchmark() -> str:
+    from facetrak.vision.models import BenchmarkLab
+    import numpy as np
+    a = np.random.rand(64, 64)
+    import json
+    return json.dumps(BenchmarkLab().run(lambda: a @ a, "cpu-64",
+                                         mode="synthetic"),
+                      indent=1)[:2000]
+
+
+@server.tool(description="List event rules")
+def rules_list() -> str:
+    from facetrak.automation.platform import RulesEngine
+    from facetrak.core import config as _cfg
+    import json
+    eng = RulesEngine(_cfg.load())
+    return json.dumps(eng.rules, indent=1)[:4000]
+
+
+@server.tool(description="Platform health: watchdog, thermal, profiler")
+def platform_health() -> str:
+    from facetrak.device.management import ThermalGovernor
+    import json
+    e = _get_engine()
+    return json.dumps({"running": e.running, "perf": e.perf_stats(),
+                       "thermal": ThermalGovernor().evaluate()},
+                      indent=1)[:4000]
+
+
+@server.tool(description="Recent logs/metrics summary (redacted)")
+def logs_metrics() -> str:
+    e = _get_engine()
+    import json
+    return json.dumps({"perf": e.perf_stats(),
+                       "events": e.recent_events(10)}, indent=1)[:4000]
+
+
 def run():
     server.run(transport="stdio")
 

@@ -74,3 +74,40 @@ jobs:
           sudo mkdir -p /opt/facetrak/.venv/bin
           sudo ln -sf /usr/bin/python3 /opt/facetrak/.venv/bin/python
           sudo systemd-analyze verify $PWD/deploy/facetrak.service
+
+  frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package.json
+      - name: Install
+        run: npm ci --prefix web
+      - name: Typecheck
+        run: npx --prefix web tsc --noEmit
+      - name: Component tests
+        run: npm test --prefix web
+      - name: Build
+        run: npm run build --prefix web
+
+  api-smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (headless OpenCV on Linux)
+        run: |
+          pip install -e . --no-deps
+          pip install mediapipe pytest httpx fastapi uvicorn
+          pip install --force-reinstall --no-deps opencv-contrib-python-headless
+      - name: API v1 smoke
+        run: python -m pytest tests/test_api_v1.py tests/test_rest_api.py -q
+      - name: Simulation tests (virtual cameras, replay, rules)
+        run: python -m pytest tests/test_facetrak1.py -q
+      - name: Dependency audit
+        run: pip audit || echo "pip-audit not installed; manual review required"

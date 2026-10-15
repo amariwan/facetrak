@@ -1,0 +1,21 @@
+{
+ "compilerOptions": {
+  "target": "ES2020",
+  "module": "ESNext",
+  "moduleResolution": "bundler",
+  "jsx": "react-jsx",
+  "strict": true,
+  "types": [
+   "node"
+  ],
+  "skipLibCheck": true,
+  "lib": [
+   "ESNext",
+   "DOM",
+   "DOM.Iterable"
+  ]
+ },
+ "include": [
+  "src"
+ ]
+}

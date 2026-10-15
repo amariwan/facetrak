@@ -73,6 +73,9 @@ def require_auth(creds: HTTPAuthorizationCredentials = Depends(bearer)):
 
 app = FastAPI(title="FaceTrak", version="2.0", lifespan=_lifespan)
 
+from facetrak.servers.routers_v1 import router as _v1_router
+app.include_router(_v1_router)
+
 
 @app.exception_handler(HTTPException)
 async def _http_errors(_: Request, exc: HTTPException):
