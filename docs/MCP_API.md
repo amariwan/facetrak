@@ -1,6 +1,6 @@
 # MCP Server API Reference
 
-The `facetrak-mcp` command starts an MCP (Model Context Protocol) server over stdio, exposing 24 tools for face detection, recognition, and tracking.
+The `facetrak-mcp` command starts an MCP (Model Context Protocol) server over stdio, exposing ~31 tools for face detection, recognition, and tracking.
 
 **Server name:** `FaceTrak`
 
@@ -19,13 +19,15 @@ List all registered people.
 
 **Returns:** Formatted list of names, or `"No faces registered."`.
 
-### `forget_person(name: str)`
+### `forget_person(name: str, confirm: bool = false)`
 
-Delete a registered person.
+Delete a registered person. When `FACETRAK_MCP_REQUIRE_CONFIRM=1` is
+set, `confirm=true` is required, otherwise the action is refused.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `name` | `string` | Name of the person to forget |
+| `confirm` | `boolean` | Explicit consent for this destructive action |
 
 ### `register_person(name: str)`
 
@@ -184,3 +186,13 @@ Show the presence event history (who appeared/left, when, and for how long) from
 ### `take_snapshot`
 
 Save the current camera frame (with overlay) as `snapshot_<timestamp>.png` and return its path.
+
+## Security notes (FaceTrak Next)
+
+- `get_config`, `camera_list` and `get_status` redact credentials from
+  RTSP/ONVIF URLs (`user:pass@` never leaves the server).
+- `update_config(key, value, confirm=false)` and
+  `reset_config(confirm=false)` are confirm-gated when
+  `FACETRAK_MCP_REQUIRE_CONFIRM=1`.
+- There are no per-tool scopes: any MCP client has full control.
+  Only connect trusted clients.

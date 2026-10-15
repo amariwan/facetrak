@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FaceTrak Dashboard</title>
+<style>
+  :root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --line:#30363d;
+          --fg:#e6edf3; --dim:#8b949e; --ok:#3fb950; --bad:#f85149; --acc:#58a6ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 system-ui,-apple-system,sans-serif; }
+  header { padding:12px 16px; border-bottom:1px solid var(--line);
+           display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  #conn { font-size:12px; padding:2px 10px; border-radius:20px;
+          border:1px solid var(--line); color:var(--dim); }
+  #conn.up { color:var(--ok); border-color:var(--ok); }
+  #conn.down { color:var(--bad); border-color:var(--bad); }
+  main { display:grid; grid-template-columns: 2fr 1fr; gap:12px; padding:12px;
+         max-width:1400px; margin:0 auto; }
+  @media (max-width:900px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line);
+          border-radius:8px; padding:12px; min-width:0; }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em;
+             color:var(--dim); margin:0 0 8px; }
+  #preview { width:100%; border-radius:6px; background:#000; aspect-ratio:4/3;
+             object-fit:contain; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td,th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
+  .pill { display:inline-block; padding:0 8px; border-radius:12px;
+          border:1px solid var(--line); font-size:12px; }
+  .ok{color:var(--ok);} .bad{color:var(--bad);} .dim{color:var(--dim);}
+  #faces li, #events li { margin-bottom:4px; }
+  ul { padding-left:18px; margin:0; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  button { background:#21262d; color:var(--fg); border:1px solid var(--line);
+           border-radius:6px; padding:6px 12px; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  input { background:#0d1117; color:var(--fg); border:1px solid var(--line);
+          border-radius:6px; padding:6px 8px; width:100%; }
+  label { font-size:12px; color:var(--dim); display:block; margin:8px 0 4px; }
+  #err { color:var(--bad); font-size:13px; min-height:1.2em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FaceTrak</h1>
+  <span id="conn" class="down">connecting…</span>
+  <span class="dim" id="token-note"></span>
+</header>
+<main>
+  <section class="card">
+    <h2>Live preview</h2>
+    <img id="preview" alt="camera preview">
+    <div id="err"></div>
+    <div class="row">
+      <button data-act="start">Start camera</button>
+      <button data-act="stop">Stop camera</button>
+      <button data-act="snapshot">Snapshot</button>
+    </div>
+  </section>
+  <section class="card">
+    <h2>Status</h2>
+    <table id="status"><tbody></tbody></table>
+    <h2 style="margin-top:12px">Faces</h2>
+    <ul id="faces"></ul>
+  </section>
+  <section class="card">
+    <h2>Performance</h2>
+    <table id="perf"><tbody></tbody></table>
+  </section>
+  <section class="card">
+    <h2>Recent events</h2>
+    <ul id="events"></ul>
+    <label for="token">API token (sent as Bearer, kept in this page only)</label>
+    <input id="token" type="password" placeholder="empty if auth disabled" autocomplete="off">
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const tokenInput = $('token');
+const headers = () => {
+  const t = tokenInput.value.trim();
+  return t ? { 'Authorization': 'Bearer ' + t } : {};
+};
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { ...headers(), ...(opts.headers||{}) }, ...opts });
+  if (!r.ok) {
+    let msg = r.status + ' ' + r.statusText;
+    try { const j = await r.json(); if (j.error) msg = j.error.code + ': ' + j.error.message; } catch(e){}
+    throw new Error(msg);
+  }
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('json') ? r.json() : r.text();
+}
+function setConn(up, label) {
+  const c = $('conn');
+  c.className = up ? 'up' : 'down';
+  c.textContent = label;
+}
+function rows(el, obj) {
+  $(el).querySelector('tbody').innerHTML =
+    Object.entries(obj).map(([k,v]) =>
+      `<tr><th>${k}</th><td>${typeof v === 'object' ? JSON.stringify(v) : v}</td></tr>`).join('');
+}
+async function refresh() {
+  try {
+    const s = await api('/status');
+    setConn(true, s.running ? '● running' : '● idle');
+    $('err').textContent = '';
+    rows('status', { camera: s.camera, faces: s.faces, recording: s.recording,
+      blur: s.blur_unknown, servo: s.servo_enabled, heatmap: s.heatmap,
+      zones: (s.zones||[]).join(', ') || '—', mqtt: s.mqtt.enabled ? (s.mqtt.connected?'connected':'down') : 'off' });
+    const f = await api('/faces').catch(() => []);
+    $('faces').innerHTML = (f||[]).map(x =>
+      `<li><span class="pill">${x.name}</span> #${x.id} · dwell ${x.dwell_s}s · q ${x.quality}</li>`).join('') || '<li class="dim">none</li>';
+    const m = await api('/metrics');
+    rows('perf', { fps: (m.fps||0).toFixed(1), step_ms: (m.step_ms||0).toFixed(1),
+      detect_ms: (m.detect_ms||0).toFixed(1), drops: m.drops, tracks: m.tracks });
+    const ev = await api('/events?limit=10');
+    const all = [...(ev.live||[])].slice(-10).reverse();
+    $('events').innerHTML = all.map(e =>
+      `<li>${e.kind}${e.zone ? ' @ ' + e.zone : ''} <span class="dim">#${e.track_id ?? '—'}</span></li>`).join('') || '<li class="dim">none yet</li>';
+    $('preview').src = '/preview.mjpg';
+  } catch (e) {
+    setConn(false, '○ unreachable');
+    $('err').textContent = String(e.message || e);
+  }
+}
+document.querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', async () => {
+  try {
+    const a = b.dataset.act;
+    if (a === 'start') await api('/camera/start', { method: 'POST' });
+    if (a === 'stop') await api('/camera/stop', { method: 'POST' });
+    if (a === 'snapshot') { await api('/snapshot'); }
+    refresh();
+  } catch (e) { $('err').textContent = String(e.message || e); }
+}));
+tokenInput.addEventListener('input', refresh);
+setInterval(refresh, 2000);
+refresh();
+</script>
+</body>
+</html>

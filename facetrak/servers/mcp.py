@@ -1,11 +1,14 @@
+import os
 import threading
 import time
+
 from mcp.server.fastmcp import FastMCP
 
 from facetrak.core import config
-from facetrak.recog.facedb import FaceDatabase
-from facetrak.hardware.servo import PanTiltController
 from facetrak.core.engine import FaceEngine
+from facetrak.core.security import ENV_MCP_CONFIRM, redact_url
+from facetrak.hardware.servo import PanTiltController
+from facetrak.recog.facedb import FaceDatabase
 
 server = FastMCP(
     "FaceTrak",
@@ -15,6 +18,15 @@ server = FastMCP(
 _engine: FaceEngine | None = None
 _poll_thread: threading.Thread | None = None
 _db = FaceDatabase()
+
+
+def _need_confirm(confirm: bool) -> str | None:
+    """Risk-based gate: destructive tools require explicit confirmation
+    when FACETRAK_MCP_REQUIRE_CONFIRM=1."""
+    if os.environ.get(ENV_MCP_CONFIRM, "") == "1" and not confirm:
+        return ("Refusing sensitive action: pass confirm=true to proceed "
+                f"({ENV_MCP_CONFIRM}=1 is set).")
+    return None
 
 
 def _get_engine() -> FaceEngine:
@@ -42,16 +54,22 @@ def list_faces() -> str:
     )
 
 
-@server.tool(description="Forget (delete) a registered person")
-def forget_person(name: str) -> str:
+@server.tool(description="Forget (delete) a registered person. "
+              "Sensitive: needs confirm=true when confirmation is enforced.")
+def forget_person(name: str, confirm: bool = False) -> str:
+    refused = _need_confirm(confirm)
+    if refused:
+        return refused
     from pathlib import Path
-    import glob
-    pattern = str(Path("faces/data") / f"{name.replace(' ', '_')}.npy")
-    found = glob.glob(pattern)
-    if not found:
+
+    from facetrak.recog.facedb import FACE_DIR, sanitize_name
+    stem = sanitize_name(name)
+    if stem is None:
+        return f"Invalid name '{name}'."
+    target = (FACE_DIR / f"{stem}.npy").resolve()
+    if target.parent != FACE_DIR.resolve() or not target.exists():
         return f"Person '{name}' not found."
-    for f in found:
-        Path(f).unlink()
+    target.unlink()
     _db.load()
     return f"Forgot '{name}'."
 
@@ -97,7 +115,10 @@ def camera_list() -> str:
     result = []
     for i, c in enumerate(cams):
         marker = " ← active" if i == cfg.get("camera", 0) else ""
-        result.append(f"  [{i}] {c['name']} ({c['source']}){marker}")
+        src = c.get("source", c.get("url", "?"))
+        if isinstance(src, str) and "://" in src:
+            src = redact_url(src)
+        result.append(f"  [{i}] {c['name']} ({src}){marker}")
     result.append("")
     result.append("Auto-detect USB cameras:")
     import cv2
@@ -176,7 +197,7 @@ def get_status() -> str:
     e = _get_engine()
     _db.load()
     cfg = config.load()
-    cam_label = config.label(cfg, e.current_cam_idx)
+    cam_label = redact_url(config.label(cfg, e.current_cam_idx))
     if e.running:
         cx, cy = e.last_face_center
         fw, fh = e.last_face_size
@@ -272,14 +293,18 @@ def toggle_blur() -> str:
     return f"Privacy blur {'on' if state else 'off'}."
 
 
-@server.tool(description="Show current configuration")
+@server.tool(description="Show current configuration (secrets redacted)")
 def get_config() -> str:
-    cfg = config.load()
+    cfg = config.redact(config.load())
     return "\n".join(f"  {k}: {v}" for k, v in sorted(cfg.items()))
 
 
-@server.tool(description="Update a configuration value")
-def update_config(key: str, value: str) -> str:
+@server.tool(description="Update a configuration value. "
+              "Sensitive: needs confirm=true when confirmation is enforced.")
+def update_config(key: str, value: str, confirm: bool = False) -> str:
+    refused = _need_confirm(confirm)
+    if refused:
+        return refused
     cfg = config.load()
     if key not in cfg and not any(
         key.startswith(k + ".") for k in cfg
@@ -291,6 +316,9 @@ def update_config(key: str, value: str) -> str:
         for p in parts[:-1]:
             old = old[p]
         old_val = old[parts[-1]]
+        if isinstance(old_val, (list, dict)):
+            return (f"Refusing to overwrite '{key}': structured value, "
+                    f"edit config.json directly.")
         if isinstance(old_val, bool):
             new_val = value.lower() in ("true", "1", "yes")
         elif isinstance(old_val, int):
@@ -310,9 +338,14 @@ def update_config(key: str, value: str) -> str:
         return f"Failed: {e}"
 
 
-@server.tool(description="Reset configuration to defaults")
-def reset_config() -> str:
-    config.save(config.DEFAULT_CONFIG)
+@server.tool(description="Reset configuration to defaults. "
+              "Sensitive: needs confirm=true when confirmation is enforced.")
+def reset_config(confirm: bool = False) -> str:
+    refused = _need_confirm(confirm)
+    if refused:
+        return refused
+    import copy
+    config.save(copy.deepcopy(config.DEFAULT_CONFIG))
     return "Config reset to defaults."
 
 
@@ -327,12 +360,16 @@ def servo_list_ports() -> str:
 @server.tool(description="Connect to a servo controller on given port")
 def servo_connect(port: str) -> str:
     e = _get_engine()
-    if e.servo.connected:
-        e.servo.disconnect()
     cfg = config.load()
+    was_connected = e.servo.connected
+    old_port, old_baud = e.servo.port, e.servo.baud
+    if was_connected:
+        e.servo.disconnect()
     ok = e.servo.connect(port, cfg["servo"]["baud"])
     if ok:
         return f"Connected to {port}."
+    if was_connected:
+        e.servo.connect(old_port, old_baud)
     return f"Failed to connect to {port}."
 
 
