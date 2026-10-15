@@ -29,9 +29,9 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install (headless OpenCV on Linux)
         run: |
-          pip install -e .
-          pip install pytest httpx ruff
-          if [ "$RUNNER_OS" = "Linux" ]; then pip install opencv-python-headless; fi
+          pip install -e . --no-deps
+          pip install mediapipe pytest httpx ruff
+          if [ "$RUNNER_OS" = "Linux" ]; then pip install --force-reinstall --no-deps opencv-contrib-python-headless; fi
       - name: Lint
         run: ruff check facetrak tests scripts || true
       - name: Tests (mocked, no hardware)
@@ -51,8 +51,26 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Build production image (no push)
-        run: docker build -t facetrak:ci .
-      - name: Image smoke (check + health endpoint)
+      - uses: docker/setup-buildx-action@v3
+      - name: Build production image amd64 (no push)
+        run: docker build -t facetrak:ci-amd64 --platform linux/amd64 .
+      - name: Image smoke amd64 (check + import)
         run: |
-          docker run --rm facetrak:ci python -m facetrak.servers.headless --check
+          docker run --rm facetrak:ci-amd64 python -m facetrak.servers.headless --check
+      - name: Build production image arm64 (no push)
+        run: docker build -t facetrak:ci-arm64 --platform linux/arm64 .
+      - name: Image smoke arm64 (import + headless check)
+        run: |
+          docker run --rm facetrak:ci-arm64 python -m facetrak.servers.headless --check
+          docker run --rm facetrak:ci-arm64 python -m pytest tests/test_platform.py tests/test_headless.py -q
+
+  systemd:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify unit file syntax
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq systemd
+          sudo mkdir -p /opt/facetrak/.venv/bin
+          sudo ln -sf /usr/bin/python3 /opt/facetrak/.venv/bin/python
+          sudo systemd-analyze verify $PWD/deploy/facetrak.service

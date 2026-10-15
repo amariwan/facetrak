@@ -11,8 +11,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FACETRAK_DATA=/data
 
 # Runtime libs for opencv-contrib-python + mediapipe wheels.
+# libegl1/libgles2: required by the MediaPipe Tasks GPU delegate probe
+# (pose/hand), even for CPU inference — missing libs abort creation.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgl1 libglib2.0-0 libgomp1 v4l-utils \
+        libgl1 libglib2.0-0 libgomp1 libegl1 libgles2 v4l-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

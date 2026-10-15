@@ -4,8 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 faces/data/*.npy
-face_detector.task
-face_landmarker.task
+*.task
 snap_*.png
 recording_*.mp4
 config.json
