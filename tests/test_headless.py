@@ -37,6 +37,7 @@ def test_snapshot_routes_to_data_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cfgmod, "CONFIG_PATH", tmp_path / "config.json")
     monkeypatch.setattr(dbmod, "DB_PATH", tmp_path / "t.db")
+    monkeypatch.delenv("FACETRAK_DATA", raising=False)  # env wins over cfg
     e = FaceEngine()
     e.cfg["data_dir"] = str(tmp_path / "shots")
     e._frame = np.zeros((8, 8, 3), dtype=np.uint8)

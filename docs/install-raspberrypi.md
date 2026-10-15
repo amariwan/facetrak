@@ -30,11 +30,27 @@ python3 -m venv .venv && .venv/bin/pip install --upgrade pip
 ```
 
 ARM64 wheel status (verified via PyPI metadata 2026-10-15):
-`opencv-contrib-python` 4.13.0.92 and `numpy` ship
-`manylinux_aarch64` wheels. **`mediapipe` 0.10.35 ships NO
-manylinux_aarch64 wheel** — FaceTrak detects this at import and
-auto-disables face analysis (emotion/gaze/pose/gestures). Detection,
-tracking, recognition, zones, servo and MQTT run fully without it.
+`opencv-contrib-python` and `numpy` ship `manylinux_aarch64` wheels.
+**`mediapipe` 1.1.1 (2026-10-14) ships `manylinux_2_28_aarch64`** —
+glibc ≥ 2.28 required (bookworm 2.36, bullseye 2.31: both fine).
+FaceTrak needs `mediapipe>=1.1.1` (`pyproject.toml`, Tasks API for
+face/pose/hand landmarkers; the legacy `mp.solutions` API was removed
+upstream in 1.x and is no longer used). If MediaPipe is missing anyway
+(minimal image), analysis features auto-disable with a log warning —
+detection, tracking, recognition, zones, servo and MQTT keep running.
+
+MediaPipe pulls `sounddevice` + `matplotlib` with it; for audio input
+also install the system library:
+
+```bash
+sudo apt install -y libportaudio2
+```
+
+Privacy note: upstream MediaPipe Tasks sends performance/utilization
+metrics to Google (see goo.gle/mediapipe-privacy). On-device inference
+stays local, but you owe users informed consent about the metrics
+traffic where applicable. To run fully offline/metric-free, leave
+MediaPipe uninstalled — the fallback covers it.
 
 ## 3. Configure
 

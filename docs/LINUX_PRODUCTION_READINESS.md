@@ -61,32 +61,56 @@ keine Messung unten ist ein Linux-Hardware-Nachweis.
 
 - `opencv-contrib-python` 4.13.0.92: **manylinux_aarch64-Wheels vorhanden** ✓
 - `numpy` 2.4.6: aarch64-Wheels ✓ (Upstream-Standard)
-- `mediapipe` 0.10.35: **kein manylinux_aarch64-Wheel**
-  (nur macosx_arm64, manylinux_x86_64, win) ✗ → auf Pi auto-degradiert,
-  kein Install-Fehler, keine Crashs. Volle Analyse nur auf x86_64/macOS.
+- `mediapipe` 1.1.1 (Release 2026-10-14): **manylinux_2_28_aarch64-Wheel
+  vorhanden** ✓ (39 MB, ABI `py3-none`, glibc ≥ 2.28 — bookworm/bullseye
+  ok). Floor in `pyproject.toml` auf `>=1.1.1` angehoben, `uv.lock`
+  synchronisiert.
+- API-Kompatibilität (gegen installiertes 1.1.1 verifiziert):
+  FaceLandmarker/PoseLandmarker/HandLandmarker (Tasks API) laden und
+  inferieren; legacy-`mp.solutions` (in 1.x entfernt) aus
+  `pose.py`/`gestures.py` auf Tasks-API migriert, öffentliche
+  Methoden-Signaturen unverändert. Fallback bei fehlendem MediaPipe
+  bleibt dokumentiert erhalten (Graceful-Disable + Warnung).
+- Privacy: MediaPipe Tasks sendet Nutzungs-/Perf-Metriken an Google
+  (Upstream-Hinweis) — Einwilligungspflicht beachten; voll offline =
+  MediaPipe weglassen, Fallback greift.
 - `picamera2`/`RPi.GPIO`: Pi-only, korrekt optional markiert, guarded Imports.
 - Kein Core ML, kein AVFoundation, kein osascript im Produktionspfad
   (per Test bewiesen).
 
-## 5. CI-Ergebnisse
+## 5. CI- und Validierungsergebnisse (echte Läufe, 2026-10-15)
 
-- Erweitert: Matrix macOS-14/py3.13 (dev), Ubuntu-22.04/py3.11+3.12,
-  **ubuntu-24.04-arm/py3.12**, dazu `headless --check`, Docker-Build +
-  Container-Smoke. ARM-Job läuft nur soweit GitHub-Runner verfügbar.
-- Lokal (MacBook, dev-only): **117/117 Tests PASS** (96 Bestand + 21 neu),
-  `ruff` auf allen neuen/geänderten Dateien sauber (Rest-Findings in
-  fremden Dirty-Zeilen bewusst unberührt), API-Smoke `/system` ok,
-  `headless --check` Exit 0.
+| # | Check | Umgebung | Ergebnis |
+|---|---|---|---|
+| 1 | pytest voll (121 Tests) | macOS arm64, mp 1.1.1, venv | PASS |
+| 2 | Tasks-Backend-Regression (face/pose/hand, echte Inferenz) | macOS arm64, mp 1.1.1 | PASS (4/4) |
+| 3 | `headless --check` | macOS + Container (beide Arch) | PASS, Exit 0 |
+| 4 | pytest Subset (114 Tests, ohne Deploy-/Tasks-Tests) | linux/arm64-Container (QEMU) | PASS |
+| 5 | Tasks-Inferenz pose/hand | linux/arm64-Container (Final-Image mit libegl1+libgles2) | PASS (4/4 `test_tasks_backend.py`) |
+| 6 | Tasks-Inferenz pose/hand | linux/amd64-Container (Final-Image) | PASS (4/4 `test_tasks_backend.py`) |
+| 7 | `systemd-analyze verify deploy/facetrak.service` | ubuntu:24.04-Container | PASS |
+| 8 | Image-Build + Smoke (Importe cv2/mp, UID 10001, `--check`) | linux/amd64 + linux/arm64 Final-Images | PASS |
+| 9 | API live (`/health`, `/system` 200, Linux/x86_64/Py3.12-Felder) | linux/amd64-Container | PASS |
+| 10 | SIGTERM (`docker stop`) | linux/amd64-Container | PASS (sauberer Stopp) |
+| 11 | GitHub-Actions-Läufe (x86_64, ARM, Docker, systemd) | — | UNVERIFIED (kein Push beauftragt; Workflow liegt vor) |
+| 12 | Pi-Hardware (GPIO, CSI, Temp/Throttle, 24 h, Kamera) | — | BLOCKED (kein Pi verfügbar) |
+
+- Lokal (MacBook, dev-only): `ruff` auf allen neuen/geänderten Dateien
+  sauber; API-Smoke `/system` ok.
 - CI wurde hier nicht ausgeführt (kein Push beauftragt) → CI-Status: UNVERIFIED.
 
 ## 6. systemd- und Docker-Nachweise
 
-- systemd-Unit statisch geprüft (Test): Restart, SIGTERM, Hardening,
-  Env-File, `headless`-Exec. Echter `systemctl`-Lauf: BLOCKED (kein Linux).
+- systemd-Unit **echt verifiziert**: `systemd-analyze verify
+  deploy/facetrak.service` in `ubuntu:24.04`-Container → PASS
+  (einzige Meldung ohne Stub-Pfad war der erwartete ExecStart-Hinweis;
+  mit angelegtem Interpreter-Pfad: clean PASS). CI-Job `systemd`
+  wiederholt das. Echter `systemctl`-Start/Restart: BLOCKED (kein Linux-Host).
 - Dockerfile/Compose statisch geprüft: non-root, no-new-privileges,
   kein privileged, Healthchecks, localhost-Bind, Secrets via Env-File.
-  Echter `docker build`/Run: BLOCKED (MacBook-Docker ≠ Pi-Runtime;
-  CI-Job baut das Image).
+- Docker-Images: amd64-Build + arm64-Build, jeweils Smoke
+  (`headless --check`), Container-Checks (non-root-UID, `/health`,
+  SIGTERM-Shutdown) — Ergebnisse in der Matrix unten.
 - Shutdown-Logik (Handler, exakt-einmal, Trigger) per Unit-Test PASS.
 
 ## 7. Performance
