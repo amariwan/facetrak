@@ -70,6 +70,15 @@ jobs kept; added `frontend` (install/typecheck/vitest/build),
 Linux AMD64/ARM64, Docker, systemd results: PENDING (run on push —
 no runner in this environment).
 
+## Live server boot smoke (local, 2026-10-15)
+
+`python -m facetrak.servers.rest 18765` → `/health` 200
+`{"ok":true,"version":"2.0"}`; `/api/v1/tracking` returned live MOT
+diagnostics; `/api/v1/hardware/discovery` returned real host
+capabilities (arm64/Darwin, USB cams `[0,1]`, all accel runtimes
+honestly `false`); `/api/v1/diagnostics` 200. MCP module imports with
+all 8 F36 tools present.
+
 ## Platform compatibility
 
 macOS dev PASS (above). Linux/Docker/systemd PENDING CI. Pi 4/5,
