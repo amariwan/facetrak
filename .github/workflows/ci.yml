@@ -62,7 +62,7 @@ jobs:
       - name: Image smoke arm64 (import + headless check)
         run: |
           docker run --rm facetrak:ci-arm64 python -m facetrak.servers.headless --check
-          docker run --rm facetrak:ci-arm64 python -m pytest tests/test_platform.py tests/test_headless.py -q
+          docker run --rm facetrak:ci-arm64 sh -c "pip install -q pytest httpx && python -m pytest tests/test_platform.py tests/test_headless.py -q"
 
   systemd:
     runs-on: ubuntu-22.04

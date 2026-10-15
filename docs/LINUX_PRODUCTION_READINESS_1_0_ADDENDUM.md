@@ -6,6 +6,10 @@ This addendum covers only the 1.0 delivery delta.
 ## Verified in this delivery (evidence in PERFORMANCE_REPORT.md)
 
 - Full suite: 171 passed (macOS dev + mocked HW), ~11.5 s.
+- Docker linux/arm64 (local, 2026-10-15): image `facetrak:local-arm64`
+  built OK; headless `--check` OK; all 1.0 packages + v1 router import
+  OK; 62 passed (`test_facetrak1` + `test_platform` + `test_headless`)
+  inside the container.
 - New-module ruff: clean. Repo baseline: 120 pre-existing (CI non-blocking).
 - API v1: 6 integration tests + 12-endpoint smoke (TestClient).
 - Dashboard: vitest 1 passed, `tsc --noEmit` clean, `vite build` OK.
@@ -17,7 +21,7 @@ This addendum covers only the 1.0 delivery delta.
 | Platform | Evidence | Status |
 |---|---|---|
 | macOS dev | unit/integration/sim | PASS |
-| Linux AMD64/ARM64 | CI jobs (test, docker, systemd, frontend, api-smoke) | PENDING (run on push) |
+| Linux AMD64/ARM64 | CI jobs (test, docker, systemd, frontend, api-smoke) | ARM64 verified locally (image + 62 tests in container); AMD64 + CI PENDING (run on push) |
 | Raspberry Pi 4/5, IMX500, Hailo | adapters fallback-tested only | SOFTWARE PASS / HW BLOCKED |
 
 ## Pre-production checklist (real hardware)

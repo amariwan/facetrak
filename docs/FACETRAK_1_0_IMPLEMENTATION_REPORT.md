@@ -79,6 +79,16 @@ capabilities (arm64/Darwin, USB cams `[0,1]`, all accel runtimes
 honestly `false`); `/api/v1/diagnostics` 200. MCP module imports with
 all 8 F36 tools present.
 
+## Docker linux/arm64 (local, 2026-10-15)
+
+`docker build --platform linux/arm64 -t facetrak:local-arm64 .` OK.
+In-container: headless `--check` OK; `routers_v1` + all 1.0 packages
+import OK; **62 passed** (`test_facetrak1` + `test_platform` +
+`test_headless`, tests bind-mounted, pytest installed at runtime).
+Note: image ships no pytest — CI docker steps that run pytest inside
+the image need `pip install pytest httpx` first (pre-existing CI gap,
+unchanged by this delivery).
+
 ## Platform compatibility
 
 macOS dev PASS (above). Linux/Docker/systemd PENDING CI. Pi 4/5,

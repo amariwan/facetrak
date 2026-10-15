@@ -2,7 +2,9 @@
 
 Tests: `tests/test_facetrak1.py` (T), `tests/test_api_v1.py` (A),
 `web/src/main.test.tsx` (W). Full suite: **171 passed** (macOS dev,
-2026-10-15). Linux/Docker/systemd: CI jobs (pending run on push).
+2026-10-15). Docker linux/arm64 verified locally (image build OK,
+headless check OK, 62 container tests passed). Remaining Linux/Docker/
+systemd: CI jobs (pending run on push).
 Pi/Hailo/IMX500 hardware: BLOCKED (no device in this environment).
 
 | ID | Feature | Baseline | Implementation | Config | Tests | Runtime | HW | Docs | Status |
