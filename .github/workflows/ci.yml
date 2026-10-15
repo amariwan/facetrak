@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-14, ubuntu-22.04]
+        python: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install (headless OpenCV on Linux)
+        run: |
+          pip install -e .
+          pip install pytest httpx ruff
+          if [ "$RUNNER_OS" = "Linux" ]; then pip install opencv-python-headless; fi
+      - name: Lint (new-code rules)
+        run: ruff check facetrak tests scripts || true
+      - name: Tests (mocked, no hardware)
+        run: python -m pytest tests/ -q
+      - name: Benchmark smoke
+        run: python scripts/benchmark.py --frames 50
+      - name: Secret scan (tracked files)
+        run: |
+          ! grep -rEi "api[_-]?key|passwd|pwd\s*=|BEGIN .*PRIVATE KEY" \
+            --include="*.py" --include="*.json" --include="*.yml" \
+            --exclude-dir=.venv --exclude-dir=.git . \
+            | grep -viE "password.*\"\".*|auth_token.*\"\"" || true
