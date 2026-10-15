@@ -30,8 +30,9 @@ jobs:
       - name: Install (headless OpenCV on Linux)
         run: |
           pip install -e . --no-deps
-          pip install mediapipe pytest httpx ruff
+          pip install mediapipe pytest httpx ruff pyserial fastapi uvicorn mcp numpy pillow
           if [ "$RUNNER_OS" = "Linux" ]; then pip install --force-reinstall --no-deps opencv-contrib-python-headless; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then pip install opencv-contrib-python; fi
       - name: Lint
         run: ruff check facetrak tests scripts || true
       - name: Tests (mocked, no hardware)
@@ -56,13 +57,13 @@ jobs:
         run: docker build -t facetrak:ci-amd64 --platform linux/amd64 .
       - name: Image smoke amd64 (check + import)
         run: |
-          docker run --rm facetrak:ci-amd64 python -m facetrak.servers.headless --check
+          docker run --rm --entrypoint python facetrak:ci-amd64 -m facetrak.servers.headless --check
       - name: Build production image arm64 (no push)
         run: docker build -t facetrak:ci-arm64 --platform linux/arm64 .
       - name: Image smoke arm64 (import + headless check)
         run: |
-          docker run --rm facetrak:ci-arm64 python -m facetrak.servers.headless --check
-          docker run --rm facetrak:ci-arm64 sh -c "pip install -q pytest httpx && python -m pytest tests/test_platform.py tests/test_headless.py -q"
+          docker run --rm --entrypoint python facetrak:ci-arm64 -m facetrak.servers.headless --check
+          docker run --rm --entrypoint sh -v "$PWD/tests:/t:ro" facetrak:ci-arm64 -c "pip install -q pytest httpx && cp -r /t /tmp/t && cd /tmp && python -m pytest t/test_platform.py t/test_headless.py -q"
 
   systemd:
     runs-on: ubuntu-22.04
@@ -87,7 +88,7 @@ jobs:
       - name: Install
         run: npm ci --prefix web
       - name: Typecheck
-        run: npx --prefix web tsc --noEmit
+        run: npm --prefix web exec -- tsc --noEmit
       - name: Component tests
         run: npm test --prefix web
       - name: Build
@@ -103,7 +104,7 @@ jobs:
       - name: Install (headless OpenCV on Linux)
         run: |
           pip install -e . --no-deps
-          pip install mediapipe pytest httpx fastapi uvicorn
+          pip install mediapipe pytest httpx fastapi uvicorn pyserial mcp numpy pillow
           pip install --force-reinstall --no-deps opencv-contrib-python-headless
       - name: API v1 smoke
         run: python -m pytest tests/test_api_v1.py tests/test_rest_api.py -q
