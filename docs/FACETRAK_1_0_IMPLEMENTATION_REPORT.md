@@ -3,8 +3,9 @@
 ## Commits
 
 - Base: `f5a03a3` (prior phase head).
-- This delivery: single coherent commit `facetrak-1.0` (hash on push;
-  branch state verified via `git status` pre-commit).
+- This delivery: `68f198b` — "feat(1.0): unified edge AI platform —
+  F01–F50 software implementation" (all new modules, router, tests,
+  dashboard, installer, CI, docs).
 - Untouched dirty tree preserved: `recog/age_gender.py`,
   `recog/facedb.py`, `recog/quality.py`, `sensors/pir.py`,
   `storage/crowd.py`, `storage/stats.py`, `viz/ui.py` (pre-existing
