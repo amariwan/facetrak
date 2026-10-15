@@ -1,5 +1,6 @@
 __pycache__/
 .mypy_cache/
+.pytest_cache/
 *.egg-info/
 .venv/
 faces/data/*.npy
@@ -11,3 +12,14 @@ config.json
 *.onnx
 events.jsonl
 snapshot_*.png
+# ── sensitive runtime data ──
+facetrak.db
+facetrak.db-*
+crowd_stats.csv
+emotion_log.csv
+*.caffemodel
+*.prototxt
+face_recognition_sface.onnx
+face_detection_yunet.onnx
+.env
+.config.*.tmp

@@ -1,9 +1,10 @@
 import datetime
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-DB_PATH = Path("facetrak.db")
+DB_PATH = Path(os.environ.get("FACETRAK_DB", "facetrak.db"))
 
 
 def _ts() -> str:
@@ -48,9 +49,20 @@ def init():
                 ts    TEXT NOT NULL,
                 count INTEGER
             );
+            CREATE TABLE IF NOT EXISTS events (
+                id       INTEGER PRIMARY KEY,
+                ts       TEXT NOT NULL,
+                kind     TEXT NOT NULL,
+                zone     TEXT,
+                track_id INTEGER,
+                name     TEXT,
+                detail   TEXT
+            );
             CREATE INDEX IF NOT EXISTS idx_presence_ts   ON presence(ts);
             CREATE INDEX IF NOT EXISTS idx_emotion_ts    ON emotion_log(ts);
             CREATE INDEX IF NOT EXISTS idx_crowd_ts      ON crowd_samples(ts);
+            CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts);
+            CREATE INDEX IF NOT EXISTS idx_events_kind   ON events(kind);
         """)
 
 
@@ -135,3 +147,54 @@ class PresenceLog:
     @staticmethod
     def tail(limit: int = 50) -> list[dict]:
         return query_presence(limit)
+
+
+# ── Zone/event log ──
+
+def log_event(kind: str, zone: str | None = None,
+              track_id: int | None = None, name: str | None = None,
+              detail: str | None = None):
+    with _conn() as con:
+        con.execute(
+            "INSERT INTO events(ts,kind,zone,track_id,name,detail) "
+            "VALUES(?,?,?,?,?,?)",
+            (_ts(), kind, zone, track_id, name, detail))
+
+
+def query_events(limit: int = 200, kind: str | None = None) -> list[dict]:
+    with _conn() as con:
+        if kind:
+            rows = con.execute(
+                "SELECT * FROM events WHERE kind=? ORDER BY ts DESC LIMIT ?",
+                (kind, limit),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM events ORDER BY ts DESC LIMIT ?", (limit,)
+            ).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+def purge_older_than(days: int) -> dict:
+    """Delete rows older than `days`. Returns per-table delete counts."""
+    if days <= 0:
+        return {"presence": 0, "emotion_log": 0, "crowd_samples": 0,
+                "events": 0}
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)
+              ).isoformat(timespec="seconds")
+    counts = {}
+    with _conn() as con:
+        for table in ("presence", "emotion_log", "crowd_samples", "events"):
+            cur = con.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+            counts[table] = cur.rowcount
+    return counts
+
+
+def delete_all() -> dict:
+    """Full erasure of runtime data (faces/*.npy are handled separately)."""
+    counts = {}
+    with _conn() as con:
+        for table in ("presence", "emotion_log", "crowd_samples", "events"):
+            cur = con.execute(f"DELETE FROM {table}")
+            counts[table] = cur.rowcount
+    return counts
