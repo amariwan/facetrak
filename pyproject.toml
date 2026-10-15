@@ -5,7 +5,9 @@ description = "Real-time face detection, recognition and tracking with OpenCV an
 requires-python = ">=3.11"
 dependencies = [
     "opencv-contrib-python>=4.13.0.92",
-    "mediapipe>=0.10.35",
+    # Tasks API (face/pose/hand landmarkers) verified against 1.1.1;
+    # 1.1.1 also ships the first manylinux_aarch64 wheel (Pi support).
+    "mediapipe>=1.1.1",
     "numpy>=2.4.6",
     "pillow>=12.2.0",
     "pyserial>=3.5",
