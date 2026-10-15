@@ -25,24 +25,49 @@ sim:
 setup:
     {{pip}} install -e .
 
+# Run full test suite
+test:
+    {{python}} -m pytest tests/ -q
+
+# Lint changed/new Python code (repo-wide baseline has pre-existing findings)
+lint:
+    ruff check facetrak tests scripts
+
+# Auto-fix import order in touched modules only
+lint-fix:
+    ruff check --fix --select I,E9,F facetrak tests scripts
+
+# Reproducible performance benchmark (no camera needed)
+bench frames="200":
+    {{python}} scripts/benchmark.py --frames {{frames}}
+
+# Purge rows older than retention_days via API (needs server + token)
+purge token="":
+    curl -s -X POST -H "Authorization: Bearer {{token}}" http://127.0.0.1:8765/retention/purge; echo
+
 # Install single dependency and update pyproject.toml
 install dep="":
     {{pip}} install "{{dep}}"
-    {{pip}} freeze | grep -ivE "^(opencv|mediapipe|numpy|pillow)" | xargs -r -I{} echo "# {}"
+    {{pip}} freeze | grep -ivE "^(opencv|mediapipe|numpy|pillow)" | grep . | xargs -I{} echo "# {}"
     @echo "Don't forget to add {{dep}} to pyproject.toml manually"
 
 # Show registered faces
 list-faces:
-    @ls -1 faces/ 2>/dev/null || echo "No faces registered yet"
+    @ls -1 faces/data/ 2>/dev/null || echo "No faces registered yet"
 
 # Delete a registered person (usage: just forget NAME)
 forget name:
-    rm -rf faces/"{{name}}"
-    {{python}} -c "print('Deleted', '{{name}}')"
+    #!/usr/bin/env bash
+    set -u
+    if [ -z "{{name}}" ]; then echo "usage: just forget NAME"; exit 1; fi
+    safe="$(printf '%s' '{{name}}' | tr ' ' '_' | tr -cd 'A-Za-z0-9_-')"
+    if [ -z "$safe" ]; then echo "invalid name"; exit 1; fi
+    rm -f "faces/data/${safe}.npy"
+    echo "Deleted {{name}} (if it existed)"
 
 # Delete ALL registered faces
 clear-faces:
-    rm -rf faces/*/
+    rm -f faces/data/*.npy
     @echo "All faces deleted"
 
 # Update dependency versions in pyproject.toml
