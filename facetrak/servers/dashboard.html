@@ -71,6 +71,10 @@
     <table id="perf"><tbody></tbody></table>
   </section>
   <section class="card">
+    <h2>Hardware / System</h2>
+    <table id="sys"><tbody></tbody></table>
+  </section>
+  <section class="card">
     <h2>Recent events</h2>
     <ul id="events"></ul>
     <label for="token">API token (sent as Bearer, kept in this page only)</label>
@@ -117,7 +121,16 @@ async function refresh() {
       `<li><span class="pill">${x.name}</span> #${x.id} · dwell ${x.dwell_s}s · q ${x.quality}</li>`).join('') || '<li class="dim">none</li>';
     const m = await api('/metrics');
     rows('perf', { fps: (m.fps||0).toFixed(1), step_ms: (m.step_ms||0).toFixed(1),
-      detect_ms: (m.detect_ms||0).toFixed(1), drops: m.drops, tracks: m.tracks });
+      detect_ms: (m.detect_ms||0).toFixed(1), detect_every: m.detect_every ?? '—',
+      drops: m.drops, tracks: m.tracks });
+    try {
+      const s = await api('/system');
+      rows('sys', { platform: (s.platform.machine||'?') + (s.platform.is_pi?' · Pi':'') + (s.platform.headless?' · headless':''),
+        cpu_temp: s.system.cpu_temp_c != null ? s.system.cpu_temp_c.toFixed(1)+' °C' : 'n/a',
+        load: (s.system.load_1_5_15||[]).join(' ') || 'n/a',
+        rss: s.system.self_rss_mb != null ? s.system.self_rss_mb+' MB' : 'n/a',
+        throttled: s.system.throttled || 'n/a' });
+    } catch(e) { /* /system optional on older backends */ }
     const ev = await api('/events?limit=10');
     const all = [...(ev.live||[])].slice(-10).reverse();
     $('events').innerHTML = all.map(e =>

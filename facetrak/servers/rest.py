@@ -19,6 +19,9 @@ from facetrak.core import config as cfgmod
 from facetrak.core.engine import FaceEngine
 from facetrak.core.security import get_api_token, verify_token
 from facetrak.events import PrivacyMask, Zone
+from facetrak.integrations.go2rtc import go2rtc_config_summary
+from facetrak.platform import platform_summary
+from facetrak.platform.metrics import system_status
 from facetrak.storage import db
 
 logger = logging.getLogger(__name__)
@@ -134,6 +137,17 @@ def status(_: bool = Depends(require_auth)):
 @app.get("/metrics")
 def metrics(_: bool = Depends(require_auth)):
     return _get().perf_stats()
+
+
+@app.get("/system")
+def system(_: bool = Depends(require_auth)):
+    e = _get()
+    return {
+        "platform": platform_summary(),
+        "system": system_status(),
+        "resources": e.resources.check(),
+        "go2rtc": go2rtc_config_summary(e.cfg),
+    }
 
 
 @app.get("/cameras")
