@@ -16,6 +16,14 @@ DEFAULT_CONFIG = {
     ],
     "detect_width": 480,
     "detect_every": 1,
+    # Adaptive inference: raise detect_every (1..4) when frames are slow,
+    # lower it when headroom returns. Bounded, self-neutralizing on fast HW.
+    "detect_adaptive": True,
+    "detect_target_ms": 33.0,
+    "resources": {
+        # Soft RSS cap in MB, 0 = off. Warns + GC only, never kills.
+        "max_memory_mb": 0,
+    },
     "recog_threshold": 0.36,
     "blur_unknown": False,
     "blur_persons": [],
