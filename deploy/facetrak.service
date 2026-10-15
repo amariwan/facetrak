@@ -1,0 +1,35 @@
+# FaceTrak headless service (Raspberry Pi OS / Debian / Ubuntu).
+# Install: sudo cp facetrak.service /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable --now facetrak
+[Unit]
+Description=FaceTrak headless computer vision
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=facetrak
+Group=facetrak
+WorkingDirectory=/opt/facetrak
+Environment=FACETRAK_CONFIG=/var/lib/facetrak/config.json
+Environment=FACETRAK_DB=/var/lib/facetrak/facetrak.db
+Environment=FACETRAK_DATA=/var/lib/facetrak
+# Load secrets (0600, root:facetrak): FACETRAK_API_TOKEN=...
+EnvironmentFile=-/etc/facetrak/env
+ExecStart=/opt/facetrak/.venv/bin/python -m facetrak.servers.headless
+Restart=on-failure
+RestartSec=5
+# Graceful shutdown: SIGTERM → camera/GPIO release
+KillSignal=SIGTERM
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/facetrak
+# Hardware access: uncomment what the deployment needs
+#DeviceAllow=/dev/video0 rw
+#DeviceAllow=/dev/vchiq rw
+#SupplementaryGroups=dialout gpio video
+
+[Install]
+WantedBy=multi-user.target

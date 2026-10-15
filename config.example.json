@@ -1,0 +1,84 @@
+{
+  "camera": 0,
+  "cameras": [
+    {
+      "name": "USB",
+      "type": "usb",
+      "source": 0
+    }
+  ],
+  "detect_width": 320,
+  "detect_every": 1,
+  "detect_adaptive": true,
+  "detect_target_ms": 50.0,
+  "resources": {
+    "max_memory_mb": 1200
+  },
+  "recog_threshold": 0.36,
+  "blur_unknown": false,
+  "blur_persons": [],
+  "heatmap": false,
+  "api_port": 8765,
+  "api": {
+    "host": "127.0.0.1",
+    "auth_token": ""
+  },
+  "servo_target": "largest",
+  "notifications": true,
+  "data_dir": "",
+  "retention_days": 14,
+  "privacy": {
+    "hide_estimates": false,
+    "allow_identifying_exports": false
+  },
+  "zones": [],
+  "privacy_masks": [],
+  "events": {
+    "enabled": true,
+    "max_events": 1000
+  },
+  "mqtt": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 1883,
+    "topic_prefix": "facetrak",
+    "username": "",
+    "password": "",
+    "tls": false,
+    "include_names": false
+  },
+  "go2rtc": {
+    "enabled": false,
+    "url": "http://127.0.0.1:1984"
+  },
+  "servo": {
+    "port": "",
+    "baud": 115200,
+    "pan_min": 0,
+    "pan_max": 180,
+    "tilt_min": 0,
+    "tilt_max": 180,
+    "dead_zone": 15,
+    "smooth": 0.12,
+    "max_step": 3.0,
+    "max_speed_dps": 90.0,
+    "reacquire_frames": 30,
+    "pan_offset": 0.0,
+    "tilt_offset": 0.0,
+    "invert_pan": false,
+    "invert_tilt": false
+  },
+  "zoom": {
+    "enabled": false,
+    "target_ratio": 0.3,
+    "hysteresis": 0.05
+  },
+  "objects_enabled": false,
+  "pose_enabled": false,
+  "gestures_enabled": false,
+  "audio_enabled": false,
+  "pir_enabled": false,
+  "pir_gpio_pin": 17,
+  "depth_enabled": false,
+  "mirror": false
+}

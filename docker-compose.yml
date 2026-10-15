@@ -1,0 +1,49 @@
+# FaceTrak production stack. No privileged containers.
+# Camera devices are passed explicitly; uncomment what the host provides.
+services:
+  facetrak:
+    build: .
+    image: facetrak:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"  # LAN: put a reverse proxy + TLS in front
+    env_file:
+      - .env  # FACETRAK_API_TOKEN=... (never commit)
+    environment:
+      FACETRAK_CONFIG: /data/config.json
+      FACETRAK_DB: /data/facetrak.db
+      FACETRAK_DATA: /data
+    volumes:
+      - facetrak-data:/data
+    #devices:
+    #  - /dev/video0:/dev/video0  # USB camera (host path may vary)
+    #  - /dev/vchiq:/dev/vchiq    # Pi Camera (legacy stack; libcamera needs more)
+    #device_cgroup_rules:
+    #  - 'c 81:* rmw'             # V4L2 device class alternative to fixed paths
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # Optional local MQTT broker (profile: --profile mqtt)
+  mqtt:
+    image: eclipse-mosquitto:2
+    profiles: ["mqtt"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1883:1883"
+    volumes:
+      - mosquitto-data:/mosquitto/data
+    command: mosquitto -c /mosquitto-no-auth.conf
+    # Production: provide your own mosquitto.conf with password_file + TLS.
+
+volumes:
+  facetrak-data:
+  mosquitto-data:

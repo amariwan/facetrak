@@ -8,9 +8,19 @@ on:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-22.04]
-        python: ["3.11", "3.13"]
+        include:
+          - os: macos-14
+            python: "3.13"
+            dev-only: true
+          - os: ubuntu-22.04
+            python: "3.11"
+          - os: ubuntu-22.04
+            python: "3.12"
+          # ARM64 production arch (Pi 4/5 class); runs only when available.
+          - os: ubuntu-24.04-arm
+            python: "3.12"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +32,12 @@ jobs:
           pip install -e .
           pip install pytest httpx ruff
           if [ "$RUNNER_OS" = "Linux" ]; then pip install opencv-python-headless; fi
-      - name: Lint (new-code rules)
+      - name: Lint
         run: ruff check facetrak tests scripts || true
       - name: Tests (mocked, no hardware)
         run: python -m pytest tests/ -q
+      - name: Headless smoke (no camera)
+        run: python -m facetrak.servers.headless --check
       - name: Benchmark smoke
         run: python scripts/benchmark.py --frames 50
       - name: Secret scan (tracked files)
@@ -34,3 +46,13 @@ jobs:
             --include="*.py" --include="*.json" --include="*.yml" \
             --exclude-dir=.venv --exclude-dir=.git . \
             | grep -viE "password.*\"\".*|auth_token.*\"\"" || true
+
+  docker:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image (no push)
+        run: docker build -t facetrak:ci .
+      - name: Image smoke (check + health endpoint)
+        run: |
+          docker run --rm facetrak:ci python -m facetrak.servers.headless --check

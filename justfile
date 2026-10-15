@@ -37,6 +37,22 @@ lint:
 lint-fix:
     ruff check --fix --select I,E9,F facetrak tests scripts
 
+# Headless production server (systemd/Docker entrypoint, no GUI)
+headless *args:
+    {{python}} -m facetrak.servers.headless {{args}}
+
+# Headless smoke check (no camera): boots engine + DB, exits 0
+headless-check:
+    {{python}} -m facetrak.servers.headless --check
+
+# Build multi-arch-capable production image (local arch by default)
+docker-build:
+    docker build -t facetrak:local .
+
+# Start production stack (add --profile mqtt for local broker)
+docker-up:
+    docker compose up -d --build
+
 # Reproducible performance benchmark (no camera needed)
 bench frames="200":
     {{python}} scripts/benchmark.py --frames {{frames}}
