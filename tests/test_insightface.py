@@ -347,3 +347,186 @@ class TestBackendAPI:
         body = r.json()
         assert body["detector_backend"] == "yunet"
         assert "insightface" in body
+
+
+# ── P1. adapter success path with self-generated dummy ONNX ──
+
+def _build_dummy_onnx(path):
+    onnx = pytest.importorskip("onnx")
+    from onnx import helper, TensorProto
+    node = helper.make_node("Identity", ["x"], ["y"])
+    graph = helper.make_graph(
+        [node], "dummy",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 14)])
+    model.ir_version = 10
+    onnx.save(model, str(path))
+
+
+class TestAdapterSuccessPath:
+    def test_load_run_info_checksum(self, tmp_path):
+        pytest.importorskip("onnxruntime")
+        from facetrak.recog.insightface_adapter import InsightFaceAdapter
+        models = tmp_path / "models"
+        models.mkdir()
+        _build_dummy_onnx(models / "dummy_identity.onnx")
+        import hashlib
+        sha = hashlib.sha256((models / "dummy_identity.onnx").read_bytes()).hexdigest()
+        a = InsightFaceAdapter({"enabled": True, "models_dir": str(models)})
+        assert a.available is True
+        assert a.provider_name == "CPUExecutionProvider"
+        sess = a.get_session("dummy_identity")
+        assert sess is not None
+        # second call returns cached session
+        assert a.get_session("dummy_identity") is sess
+        info = a.get_model_info("dummy_identity")
+        assert info["input"][0]["name"] == "x"
+        import numpy as np
+        out = sess.run([sess.get_outputs()[0].name],
+                       {"x": np.ones((1, 4), np.float32)})
+        assert out[0].shape == (1, 4)
+        assert a.list_available_models() == []
+        assert a._verify_checksum(models / "dummy_identity.onnx", sha) is True
+        assert a._verify_checksum(models / "dummy_identity.onnx", "0" * 64) is False
+        a.release()
+        assert a.available is False
+
+    def test_unknown_provider_falls_back(self, tmp_path):
+        pytest.importorskip("onnxruntime")
+        from facetrak.recog.insightface_adapter import InsightFaceAdapter
+        models = tmp_path / "models"
+        models.mkdir()
+        a = InsightFaceAdapter({"enabled": True, "models_dir": str(models),
+                                "provider": "NoSuchExecutionProvider"})
+        assert a.available is True
+        assert a.provider_name == "CPUExecutionProvider"
+
+
+# ── P5. MODEL.LICENSE gate ──
+
+class TestModelLicenseFile:
+    def _manifest(self, name="det_10g", commercial=True):
+        from facetrak.device.management import ModelManifest
+        return ModelManifest(name=name, version="1.0", file_path=f"{name}.onnx",
+                             sha256="", license="InsightFace commercial",
+                             license_url="https://www.insightface.ai",
+                             backend="scrfd", input_shape=[1, 3, 640, 640],
+                             output_shapes=[], commercial_license_required=commercial)
+
+    def test_commercial_rejected_without_license_file(self, tmp_path):
+        from facetrak.device.management import ModelRegistry
+        models = tmp_path / "models"
+        models.mkdir()
+        (models / "det_10g.onnx").write_bytes(b"weights")
+        reg = ModelRegistry({"model_registry": {"models_dir": str(models)}})
+        assert reg.register(self._manifest()) is False
+        assert "license file" in (reg.get("det_10g").load_error or "").lower()
+
+    def test_commercial_accepted_with_license_file(self, tmp_path):
+        import hashlib
+        from facetrak.device.management import ModelRegistry
+        models = tmp_path / "models"
+        models.mkdir()
+        (models / "det_10g.onnx").write_bytes(b"weights")
+        (models / "det_10g.LICENSE").write_bytes(b"commercial license text")
+        reg = ModelRegistry({"model_registry": {"models_dir": str(models)}})
+        assert reg.register(self._manifest()) is True
+        m = reg.get("det_10g")
+        assert m.license_file == "det_10g.LICENSE"
+        assert m.license_sha256 == hashlib.sha256(b"commercial license text").hexdigest()
+        status = reg.get_license_status()
+        assert status["license_files"]["det_10g"]["file"] == "det_10g.LICENSE"
+
+    def test_noncommercial_ok_without_license_file(self, tmp_path):
+        from facetrak.device.management import ModelRegistry
+        models = tmp_path / "models"
+        models.mkdir()
+        (models / "yunet.onnx").write_bytes(b"weights")
+        reg = ModelRegistry({"model_registry": {"models_dir": str(models)}})
+        assert reg.register(self._manifest("yunet", commercial=False)) is True
+
+
+# ── P2. retention purge for anonymized outputs ──
+
+class TestAnonymizePurge:
+    def test_purge_deletes_only_old_managed_files(self, tmp_path):
+        import os
+        import time
+        from facetrak.video.anonymize import purge_outputs
+        out = tmp_path / "out"
+        out.mkdir()
+        old = out / "clip_redacted.mp4"
+        old.write_bytes(b"old")
+        new = out / "fresh_redacted.mp4"
+        new.write_bytes(b"new")
+        analysis = out / "clip_privateframe.json"
+        analysis.write_bytes(b"{}")
+        source = out / "source.mp4"
+        source.write_bytes(b"do-not-touch")
+        ancient = time.time() - 10 * 86400
+        os.utime(old, (ancient, ancient))
+        os.utime(analysis, (ancient, ancient))
+        res = purge_outputs(out, retention_days=7)
+        assert res == {"checked": 3, "deleted": 2, "errors": []}
+        assert not old.exists() and not analysis.exists()
+        assert new.exists() and source.exists()
+
+    def test_purge_zero_days_keeps_all(self, tmp_path):
+        from facetrak.video.anonymize import purge_outputs
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "clip_redacted.mp4").write_bytes(b"x")
+        assert purge_outputs(out, 0)["deleted"] == 0
+
+    def test_purge_api(self, client, tmp_path):
+        import os
+        import time
+        out = tmp_path / "out"
+        out.mkdir()
+        old = out / "clip_redacted.mp4"
+        old.write_bytes(b"old")
+        ancient = time.time() - 10 * 86400
+        os.utime(old, (ancient, ancient))
+        r = client.post("/api/v1/anonymize/purge",
+                        json={"output_dir": str(out), "retention_days": 7})
+        assert r.status_code == 200
+        assert r.json()["deleted"] == 1
+        assert not old.exists()
+
+
+# ── P3. registration quality diagnostics ──
+
+class TestRegistrationDiagnose:
+    def test_empty_and_small_rejected(self):
+        import numpy as np
+        from facetrak.recog.registration import diagnose
+        d = diagnose(None)
+        assert d["accepted"] is False and "empty-crop" in d["reasons"]
+        d = diagnose(np.zeros((2, 2, 3), np.uint8))
+        assert d["accepted"] is False and d["reasons"][0].startswith("crop-too-small")
+
+    def test_dark_and_blurry_reasons(self):
+        import numpy as np
+        from facetrak.recog.registration import diagnose
+        d = diagnose(np.zeros((40, 40, 3), np.uint8))
+        assert d["accepted"] is False
+        assert any(r.startswith("too-dark") for r in d["reasons"])
+        assert any(r.startswith("blurry") for r in d["reasons"])
+        assert set(d["components"]) == {"sharpness", "brightness", "pose"}
+
+    def test_head_turn_reason(self):
+        import numpy as np
+        rng = np.random.default_rng(0)
+        img = (rng.integers(60, 190, (60, 60, 3))).astype(np.uint8)
+        from facetrak.recog.registration import diagnose
+        d = diagnose(img, yaw=40.0, pitch=0.0)
+        assert any(r.startswith("head-turned") for r in d["reasons"])
+
+    def test_quality_endpoint(self, client):
+        r = client.get("/api/v1/registration/quality")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["threshold"] == 0.55
+        assert body["required"] == 3
+        assert body["recent"] == []

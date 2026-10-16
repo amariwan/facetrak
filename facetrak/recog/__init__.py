@@ -6,6 +6,7 @@ from .age_gender import AgeGenderEstimator
 from .insightface_adapter import InsightFaceAdapter, create_adapter, ModelManifest, BUILTIN_MANIFESTS
 from .scrfd import SCRFDDetector, create_scrfd_detector, SCRFDConfig
 from .arcface import ArcFaceRecognizer, create_arcface_recognizer, ArcFaceConfig, DualEmbeddingDatabase
+from .registration import diagnose as registration_diagnose
 
 __all__ = [
     "YuNetDetector", "ensure_model",
@@ -16,4 +17,5 @@ __all__ = [
     "InsightFaceAdapter", "create_adapter", "ModelManifest", "BUILTIN_MANIFESTS",
     "SCRFDDetector", "create_scrfd_detector", "SCRFDConfig",
     "ArcFaceRecognizer", "create_arcface_recognizer", "ArcFaceConfig", "DualEmbeddingDatabase",
+    "registration_diagnose",
 ]

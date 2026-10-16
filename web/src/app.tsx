@@ -107,6 +107,8 @@ function BackendsPanel() {
           ArcFace aktivieren</button>
       </div>
       {msg && <pre role="status">{msg}</pre>}
+      <h3>Registrierungs-Qualität</h3>
+      <QualityMini />
       <h3>Modellstatus</h3>
       <ModelsMini />
     </div>);
@@ -118,6 +120,24 @@ function ModelsMini() {
   if (error) return <pre role="alert">{error}</pre>;
   return <pre aria-label="model registry">
     {JSON.stringify(data, null, 1)?.slice(0, 4000)}</pre>;
+}
+
+function QualityMini() {
+  const { data, error, loading } = useApi('/api/v1/registration/quality');
+  if (loading) return <p role="status">Loading quality…</p>;
+  if (error) return <pre role="alert">{error}</pre>;
+  const q = data as { capturing: boolean; buffered: number; required: number;
+    threshold: number; recent: { quality: number; label: string;
+      accepted: boolean; reasons: string[] }[] };
+  return (
+    <div>
+      <p>Erfassung: {q.capturing ? 'läuft' : 'gestoppt'} · Samples{' '}
+        {q.buffered}/{q.required} · Schwelle {q.threshold}</p>
+      {q.recent.length === 0 && <p>Noch keine Samples bewertet.</p>}
+      {q.recent.slice(-8).map((s, i) => (
+        <div key={i}>{s.accepted ? '✓' : '✗'} {s.label} ({s.quality}){' '}
+          {s.reasons.join(', ')}</div>))}
+    </div>);
 }
 
 type Job = {

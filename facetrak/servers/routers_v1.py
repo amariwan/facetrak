@@ -922,7 +922,6 @@ class AnonymizeRenderBody(BaseModel):
     method: str = "gaussian"
     box_scale: float = Field(default=1.15, ge=1.0, le=2.0)
 
-
 @router.post("/anonymize/render")
 def anonymize_render(body: AnonymizeRenderBody, _: bool = Depends(_auth())):
     from pathlib import Path as _P
@@ -945,3 +944,31 @@ def anonymize_render(body: AnonymizeRenderBody, _: bool = Depends(_auth())):
     # Render only: no inference, uses stored masks.
     result = anon.render(_P(input_path), analysis, _P(output_path))
     return {"ok": True, **result}
+
+
+class AnonymizePurgeBody(BaseModel):
+    output_dir: str = Field(min_length=1, max_length=1024)
+    retention_days: int | None = None
+
+
+@router.post("/anonymize/purge")
+def anonymize_purge(body: AnonymizePurgeBody, _: bool = Depends(_auth())):
+    from facetrak.video.anonymize import purge_outputs
+    from facetrak.servers.rest import _get
+
+    days = body.retention_days
+    if days is None:
+        days = int(_get().cfg.get("storage", {}).get("retention_days", 7))
+    if days < 0:
+        raise HTTPException(400, "retention_days must be >= 0")
+    out = _resolve_job_path(body.output_dir, must_exist=True)
+    from pathlib import Path as _P
+    return {"ok": True, "output_dir": out,
+            **purge_outputs(_P(out), days)}
+
+
+@router.get("/registration/quality")
+def registration_quality(limit: int = 20, _: bool = Depends(_auth())):
+    from facetrak.servers.rest import _get
+
+    return _get().registration_quality(max(1, min(limit, 50)))

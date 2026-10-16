@@ -500,6 +500,36 @@ def create_anonymizer_from_config(config: dict, face_db: FaceDatabase | None = N
     return VideoAnonymizer(analysis_cfg, redaction_cfg, adapter, face_db, reference_embeddings)
 
 
+# Managed output suffixes: only files the pipeline itself produced are
+# ever purged. Source videos are never touched.
+_MANAGED_SUFFIXES = ("_redacted.mp4", "_privateframe.json")
+
+
+def purge_outputs(output_dir: Path, retention_days: int) -> dict:
+    """Delete pipeline-produced files older than retention_days.
+
+    Returns counts only (no face data). retention_days <= 0 keeps all.
+    """
+    output_dir = Path(output_dir)
+    result: dict = {"checked": 0, "deleted": 0, "errors": []}
+    if retention_days <= 0 or not output_dir.is_dir():
+        return result
+    cutoff = time.time() - retention_days * 86400.0
+    for path in sorted(output_dir.iterdir()):
+        if not path.is_file() or not path.name.endswith(_MANAGED_SUFFIXES):
+            continue
+        result["checked"] += 1
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                result["deleted"] += 1
+        except OSError as exc:
+            result["errors"].append(f"{path.name}: {exc}")
+    logger.info("Purged %d/%d anonymized outputs in %s (retention %dd)",
+                result["deleted"], result["checked"], output_dir, retention_days)
+    return result
+
+
 # CLI entry point for standalone use
 def main():
     import argparse

@@ -1,6 +1,7 @@
 import datetime
 import logging
 import time
+from collections import deque
 
 import cv2
 import numpy as np
@@ -28,6 +29,7 @@ from facetrak.recog import (
     SCRFDDetector,
     ArcFaceRecognizer,
     InsightFaceAdapter,
+    registration_diagnose,
 )
 from facetrak.device.management import ModelRegistry
 from facetrak.sensors import AudioMonitor, DepthEstimator, PIRSensor
@@ -162,6 +164,7 @@ class FaceEngine:
 
         self._samples_buffer: list[np.ndarray] = []
         self._capturing = False
+        self._quality_log: deque = deque(maxlen=50)
 
         # InsightFace adapter (optional)
         if self.cfg.get("insightface", {}).get("enabled", False):
@@ -485,10 +488,30 @@ class FaceEngine:
         x2 = min(frame.shape[1], track.det.x + track.det.w)
         y2 = min(frame.shape[0], track.det.y + track.det.h)
         crop = frame[y1:y2, x1:x2]
-        q = quality_score(crop, self.metrics.yaw, self.metrics.pitch)
-        if q >= GOOD_THRESHOLD or not self.metrics.blendshapes:
+        diag = registration_diagnose(crop, self.metrics.yaw,
+                                     self.metrics.pitch)
+        accepted = bool(diag["accepted"] or not self.metrics.blendshapes)
+        if accepted:
             self._samples_buffer.append(emb)
+        self._quality_log.append({
+            "ts": time.time(),
+            "quality": diag["quality"],
+            "label": diag["label"],
+            "accepted": accepted,
+            "reasons": diag["reasons"],
+        })
         self.liveness.update(self.metrics.eyes_closed, self.metrics.yaw)
+
+    def registration_quality(self, limit: int = 20) -> dict:
+        """Recent capture-sample diagnostics (counts + reasons, no pixels)."""
+        recent = list(self._quality_log)[-max(1, limit):]
+        return {
+            "capturing": self._capturing,
+            "buffered": len(self._samples_buffer),
+            "required": _MIN_REG_SAMPLES,
+            "threshold": GOOD_THRESHOLD,
+            "recent": recent,
+        }
 
     def _age_gender_update(self, small: np.ndarray,
                            tracks: list, full_frame: np.ndarray):

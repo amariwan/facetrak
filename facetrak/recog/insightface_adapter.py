@@ -128,12 +128,23 @@ class InsightFaceAdapter:
 
     def __init__(self, config: dict | None = None):
         cfg = config or {}
-        self.enabled = bool(cfg.get("insightface_enabled", False))
-        self.provider_name = cfg.get("insightface_provider", "CPUExecutionProvider")
-        self.model_pack = cfg.get("insightface_model_pack", "buffalo_l")
-        self.models_dir = Path(cfg.get("insightface_models_dir", "models/insightface"))
-        self.allow_auto_download = bool(cfg.get("insightface_auto_download", False))
-        self.require_license_consent = bool(cfg.get("insightface_require_license_consent", True))
+        # Accept both flat keys (insightface_enabled) and nested engine
+        # config keys (enabled) so FaceEngine wiring actually activates.
+        self.enabled = bool(cfg.get("insightface_enabled",
+                                   cfg.get("enabled", False)))
+        self.provider_name = cfg.get(
+            "insightface_provider",
+            cfg.get("provider", "CPUExecutionProvider"))
+        self.model_pack = cfg.get("insightface_model_pack",
+                                  cfg.get("model_pack", "buffalo_l"))
+        self.models_dir = Path(cfg.get("insightface_models_dir",
+                                       cfg.get("models_dir",
+                                               "models/insightface")))
+        self.allow_auto_download = bool(cfg.get("insightface_auto_download",
+                                                cfg.get("auto_download", False)))
+        self.require_license_consent = bool(cfg.get(
+            "insightface_require_license_consent",
+            cfg.get("require_license_consent", True)))
 
         self._sessions: dict[str, Any] = {}
         self._manifests: dict[str, ModelManifest] = {}

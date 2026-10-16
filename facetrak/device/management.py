@@ -392,13 +392,16 @@ class ModelManifest:
     installed: bool = False
     active: bool = False
     load_error: str | None = None
+    license_file: str = ""
+    license_sha256: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "ModelManifest":
-        return cls(**d)
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 class ModelRegistry:
@@ -474,6 +477,28 @@ class ModelRegistry:
                 self._manifests[manifest.name] = manifest
                 self._save_manifest()
                 return False
+
+        # License-file gate: a MODEL.LICENSE file must sit next to the
+        # weights (InsightFace server convention). Commercial models are
+        # rejected without one; others record it when present.
+        license_path = file_path.with_suffix(".LICENSE")
+        if not license_path.exists():
+            license_path = file_path.parent / (file_path.name + ".LICENSE")
+        if manifest.commercial_license_required:
+            if not license_path.exists():
+                manifest.load_error = (
+                    f"Missing license file for commercial model: "
+                    f"place {license_path.name} next to {file_path.name}")
+                manifest.installed = False
+                self._manifests[manifest.name] = manifest
+                self._save_manifest()
+                return False
+        if license_path.exists():
+            manifest.license_file = license_path.name
+            manifest.license_sha256 = self.compute_checksum(license_path)
+        else:
+            manifest.license_file = ""
+            manifest.license_sha256 = ""
 
         manifest.installed = True
         manifest.load_error = None
@@ -555,6 +580,9 @@ class ModelRegistry:
             "installed": len([m for m in self._manifests.values() if m.installed]),
             "commercial_license_required": len(commercial_required),
             "models_requiring_license": [m.name for m in commercial_required],
+            "license_files": {m.name: {"file": m.license_file,
+                                       "sha256": m.license_sha256}
+                              for m in commercial_required},
             "license_consent_required": self.require_license_consent,
         }
 

@@ -114,3 +114,34 @@ erneut gebaut** (mehrminütiger Build; CI ist Evidenzpfad). Pi-Hardwaretests:
 Keine Stubs als fertige Funktionen deklariert: nicht verfügbare
 Modell-Gewichte sind als BLOCKED mit Grund ausgewiesen, Code-Pfade dafür
 sind getestet und gated (409/403), nicht als „fertig integriert“ behauptet.
+
+## Nachtrag 2026-10-16 — 6 Folgemaßnahmen (alle umgesetzt)
+
+1. Adapter-Erfolgspfad mit selbst generiertem Dummy-ONNX: PASS
+   (`TestAdapterSuccessPath`, inkl. Provider-Fallback-Test). Dabei echter
+   Verdrahtungs-Bug gefunden+behoben: Adapter las flache Keys, Engine
+   übergibt verschachtelte (`insightface.enabled`) — Adapter wäre nie aktiv
+   gewesen. Zusätzlich: `onnx`/`onnxruntime` lokal ins Dev-Venv installiert
+   (Tests skippen ohne sie per `importorskip`, CI-minimal bleibt grün).
+2. Löschfristen für Anonymize-Outputs: PASS (`purge_outputs` +
+   `POST /api/v1/anonymize/purge`, löscht nur `*_redacted.mp4` /
+   `*_privateframe.json`, Quellvideos nie; Default aus
+   `storage.retention_days`).
+3. Registrierungs-Qualitätsdiagnose live: PASS (`recog/registration.py`
+   `diagnose()` mit Gründen blurry/too-dark/too-bright/head-turned/
+   crop-too-small/below-threshold, Engine-Log, `GET
+   /api/v1/registration/quality`, Dashboard-Block). `quality.py` (fremd)
+   unverändert.
+4. Dependabot-Triage: Python-Venv per `pip-audit` SAUBER; `npm audit web`
+   fand 2 critical + 1 moderate (vitest-3-Kette) → Major-Bump auf vitest 5,
+   `npm audit` jetzt 0, vitest+tsc grün. Actions (v4/v5/v3) und
+   Dockerfile-Base (py3.12-slim-bookworm) aktuell. Restliche
+   Dependabot-Funde (transitiv/Image-Layer) separat weiterverfolgen.
+5. `MODEL.LICENSE`-Pflicht: PASS (Registry verlangt `<modell>.LICENSE`
+   neben Gewichten für kommerzielle Modelle, SHA256 wird gespeichert und in
+   `license`-Status exponiert; Tests für fehlt/ok/nicht-kommerziell).
+6. Pi-Feldtest-Protokoll: `docs/INSIGHTFACE_PI_FIELDTEST.md` (Messreihen,
+   Abnahmekriterien, Ergebnistabelle) — Ausführung weiter BLOCKED ohne Gerät.
+
+Neue Endpunkte: `POST /api/v1/anonymize/purge`,
+`GET /api/v1/registration/quality`.
