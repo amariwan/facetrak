@@ -1,4 +1,5 @@
 """Main window — orchestrates all UI components."""
+
 import math
 import time
 import tkinter as tk
@@ -6,8 +7,9 @@ from tkinter import messagebox, simpledialog, ttk
 
 from facetrak.core import config
 from facetrak.core.engine import FaceEngine
-from .components import CommandBar, Sidebar, StatusBar, VideoPanel
+
 from . import theme as T
+from .components import CommandBar, Sidebar, StatusBar, VideoPanel
 from .simulation import SimulationWindow
 
 _POLL_MS = 30
@@ -16,43 +18,90 @@ _POLL_MS = 30
 class MainWindow:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.eng  = FaceEngine()
-        self._poll_id  = None
-        self._anim_id  = None
+        self.eng = FaceEngine()
+        self._poll_id = None
+        self._anim_id = None
         self._reg_name: str | None = None
         self._reg_progress = None
 
         self._setup_theme()
 
-        root.title("FaceTrak")
+        root.title("FaceTrak · Camera workspace")
+        root.minsize(960, 620)
         root.configure(bg=T.BG_ROOT)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        root.bind("<space>",  lambda _: self._register_dialog())
-        root.bind("<r>",      lambda _: self._toggle_rec())
-        root.bind("<R>",      lambda _: self._toggle_rec())
-        root.bind("<b>",      lambda _: self._toggle_blur())
-        root.bind("<B>",      lambda _: self._toggle_blur())
-        root.bind("<h>",      lambda _: self._toggle_heatmap())
-        root.bind("<H>",      lambda _: self._toggle_heatmap())
+        for key, action in (
+            ("<space>", self._register_dialog),
+            ("<r>", self._toggle_rec),
+            ("<R>", self._toggle_rec),
+            ("<b>", self._toggle_blur),
+            ("<B>", self._toggle_blur),
+            ("<h>", self._toggle_heatmap),
+            ("<H>", self._toggle_heatmap),
+        ):
+            root.bind(key, lambda event, action=action: self._shortcut(event, action))
         root.bind("<Escape>", lambda _: self._stop() if self.eng.running else None)
 
         self._build_layout()
+        self._populate_cameras()
+        self._refresh_blur_list()
+        self._sync_toggles()
+        self._cmd_bar.target_var.set(self.eng.servo_target)
         self._animate()
+
+    def _shortcut(self, event, action):
+        # Text entry owns every key. Other controls own Space for activation.
+        widget_class = event.widget.winfo_class()
+        if widget_class in (
+            "Entry",
+            "TEntry",
+            "Text",
+            "TCombobox",
+            "Spinbox",
+            "TSpinbox",
+            "Listbox",
+        ):
+            return
+        if event.keysym == "space" and event.widget != self.root:
+            return
+        action()
+        return "break"
+
+    def _sync_toggles(self):
+        self._cmd_bar.set_toggles(
+            blur=self.eng.blur_enabled,
+            heatmap=self.eng.heatmap_enabled,
+            servo=self.eng.servo_enabled,
+            mirror=self.eng.cfg.get("mirror", False),
+        )
 
     # ── Theme ─────────────────────────────────────────────────────────────────
 
     def _setup_theme(self):
+        T.configure_fonts()
         s = ttk.Style()
         s.theme_use("clam")
-        for w in ("TFrame", "TLabel", "TButton", "TCheckbutton",
-                  "TCombobox", "TProgressbar", "TSeparator"):
+        for w in (
+            "TFrame",
+            "TLabel",
+            "TButton",
+            "TCheckbutton",
+            "TCombobox",
+            "TProgressbar",
+            "TSeparator",
+        ):
             s.configure(w, background=T.BG_ROOT)
-        s.configure("TLabel",     foreground=T.TEXT_PRIMARY, background=T.BG_ROOT)
+        s.configure("TLabel", foreground=T.TEXT_PRIMARY, background=T.BG_ROOT)
         s.configure("TSeparator", background=T.BORDER_SUBTLE)
-        s.configure("TProgressbar", background=T.ACCENT,
-                    troughcolor=T.BG_RAISED, borderwidth=0,
-                    lightcolor=T.ACCENT, darkcolor=T.ACCENT)
+        s.configure(
+            "TProgressbar",
+            background=T.ACCENT,
+            troughcolor=T.BG_RAISED,
+            borderwidth=0,
+            lightcolor=T.ACCENT,
+            darkcolor=T.ACCENT,
+        )
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -61,17 +110,17 @@ class MainWindow:
         self.root.grid_columnconfigure(0, weight=1)
 
         callbacks = {
-            "toggle_start":    self._toggle_start,
-            "toggle_rec":      self._toggle_rec,
-            "toggle_blur":     self._toggle_blur,
-            "toggle_heatmap":  self._toggle_heatmap,
-            "toggle_servo":    self._toggle_servo,
-            "toggle_mirror":   self._toggle_mirror,
+            "toggle_start": self._toggle_start,
+            "toggle_rec": self._toggle_rec,
+            "toggle_blur": self._toggle_blur,
+            "toggle_heatmap": self._toggle_heatmap,
+            "toggle_servo": self._toggle_servo,
+            "toggle_mirror": self._toggle_mirror,
             "register_dialog": self._register_dialog,
-            "list_faces":      self._list_faces,
+            "list_faces": self._list_faces,
             "set_servo_target": self.eng.set_servo_target,
-            "on_cam_select":   self._on_cam_select,
-            "open_sim":        self._open_sim,
+            "on_cam_select": self._on_cam_select,
+            "open_sim": self._open_sim,
         }
 
         self._cmd_bar = CommandBar(self.root, callbacks)
@@ -141,6 +190,7 @@ class MainWindow:
         self._cmd_bar.set_running(False)
         self._video.clear()
         self._status.clear()
+        self._status.set_recording(False)
 
     # ── Poll loop ─────────────────────────────────────────────────────────────
 
@@ -153,7 +203,7 @@ class MainWindow:
             self._video.show_frame(frame)
             self._video.update_strip(self.eng.tracker.active, self.eng._frame)
 
-            m   = self.eng.metrics
+            m = self.eng.metrics
             pri = self.eng.tracker.largest()
             cfg = config.load()
 
@@ -169,10 +219,13 @@ class MainWindow:
         # Registration progress
         if self._reg_name and self.eng._capturing:
             from facetrak.core.engine import _MAX_SAMPLES, _MIN_REG_SAMPLES
+
             n = len(self.eng._samples_buffer)
             if self._reg_progress:
                 self._reg_progress["value"] = int(100 * n / _MAX_SAMPLES)
-            if n >= _MAX_SAMPLES or (n >= _MIN_REG_SAMPLES and self.eng.liveness.passed):
+            if n >= _MAX_SAMPLES or (
+                n >= _MIN_REG_SAMPLES and self.eng.liveness.passed
+            ):
                 name = self._reg_name
                 self._reg_name = None
                 self.root.after(0, lambda: self._do_register(name))
@@ -189,17 +242,35 @@ class MainWindow:
             r = int(3 + pulse * 1.5)
             dot = self._status._rec_dot
             dot.delete("dot")
-            dot.create_oval(6 - r, 6 - r, 6 + r, 6 + r,
-                            fill=T.DANGER, outline="", tags="dot")
+            dot.create_oval(
+                6 - r, 6 - r, 6 + r, 6 + r, fill=T.DANGER, outline="", tags="dot"
+            )
         self._anim_id = self.root.after(100, self._animate)
 
     # ── Toggles ───────────────────────────────────────────────────────────────
 
-    def _toggle_rec(self):      self.eng.toggle_record()
-    def _toggle_blur(self):     self.eng.toggle_blur()
-    def _toggle_heatmap(self):  self.eng.toggle_heatmap()
-    def _toggle_servo(self):    self.eng.toggle_servo()
-    def _toggle_mirror(self):   self.eng.toggle_mirror()
+    def _toggle_rec(self):
+        if self.eng.running:
+            self.eng.toggle_record()
+            recording = self.eng.recorder.recording
+            self._cmd_bar.set_recording(recording)
+            self._status.set_recording(recording)
+
+    def _toggle_blur(self):
+        self.eng.toggle_blur()
+        self._sync_toggles()
+
+    def _toggle_heatmap(self):
+        self.eng.toggle_heatmap()
+        self._sync_toggles()
+
+    def _toggle_servo(self):
+        self.eng.toggle_servo()
+        self._sync_toggles()
+
+    def _toggle_mirror(self):
+        self.eng.toggle_mirror()
+        self._sync_toggles()
 
     # ── Registration ─────────────────────────────────────────────────────────
 
@@ -224,12 +295,20 @@ class MainWindow:
         # Header
         tk.Frame(win, bg=T.ACCENT, height=3).pack(fill=tk.X)
 
-        tk.Label(win, text=f"Scanning  {name}",
-                 fg=T.TEXT_PRIMARY, bg=T.BG_SURFACE,
-                 font=T.FONT_TITLE).pack(pady=(18, 4))
-        tk.Label(win, text="Blink twice and slowly turn your head",
-                 fg=T.TEXT_SECONDARY, bg=T.BG_SURFACE,
-                 font=T.FONT_MICRO).pack()
+        tk.Label(
+            win,
+            text=f"Scanning  {name}",
+            fg=T.TEXT_PRIMARY,
+            bg=T.BG_SURFACE,
+            font=T.FONT_TITLE,
+        ).pack(pady=(18, 4))
+        tk.Label(
+            win,
+            text="Blink twice and slowly turn your head",
+            fg=T.TEXT_SECONDARY,
+            bg=T.BG_SURFACE,
+            font=T.FONT_MICRO,
+        ).pack()
 
         bar = ttk.Progressbar(win, length=300, mode="determinate")
         bar.pack(pady=(12, 0))

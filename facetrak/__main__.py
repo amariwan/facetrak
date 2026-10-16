@@ -6,10 +6,10 @@ from .viz.ui import MainWindow
 
 def main():
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s: %(message)s")
+        level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s"
+    )
     root = tk.Tk()
-    root.geometry("960x780")
+    root.geometry("1180x820")
     MainWindow(root)
     root.mainloop()
 

@@ -1,44 +1,48 @@
 """Top command bar component."""
+
 import tkinter as tk
 from tkinter import ttk
-from typing import Callable
 
 from .. import theme as T
 from .button import Button
 
 
-def _sep(parent) -> ttk.Separator:
-    return ttk.Separator(parent, orient=tk.VERTICAL)
-
-
 class CommandBar(tk.Frame):
-    """Single-row toolbar with grouped actions."""
+    """Two-level toolbar with adaptive action groups."""
 
     HEIGHT = 48
 
     def __init__(self, parent, callbacks: dict, **kw):
         super().__init__(parent, bg=T.BG_SURFACE, height=self.HEIGHT, **kw)
-        self.grid_propagate(False)
         self._cb = callbacks
         self._build()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_running(self, running: bool):
+        self._rec_btn.set_enabled(running)
+        self._register_btn.set_enabled(running)
+        self._state_label.config(
+            text="Camera running" if running else "Camera stopped",
+            fg=T.SUCCESS if running else T.TEXT_SECONDARY,
+        )
         if running:
-            self._start_btn.set_state(text=f"{T.ICON_STOP}  Stop", variant="danger")
+            self._start_btn.set_state(text="■  Stop camera", variant="danger")
         else:
-            self._start_btn.set_state(text=f"{T.ICON_PLAY}  Start", variant="success")
-            self._rec_btn.set_state(text=f"{T.ICON_REC}  Record",
-                                    variant="default", enabled=False)
+            self._start_btn.set_state(text="▶  Start camera", variant="primary")
+            self._rec_btn.set_state(
+                text=f"{T.ICON_REC}  Record", variant="default", enabled=False
+            )
 
     def set_recording(self, recording: bool):
         if recording:
-            self._rec_btn.set_state(text=f"{T.ICON_REC}  Stop Rec",
-                                    variant="danger", enabled=True)
+            self._rec_btn.set_state(
+                text=f"{T.ICON_REC}  Stop Rec", variant="danger", enabled=True
+            )
         else:
-            self._rec_btn.set_state(text=f"{T.ICON_REC}  Record",
-                                    variant="default", enabled=True)
+            self._rec_btn.set_state(
+                text=f"{T.ICON_REC}  Record", variant="default", enabled=True
+            )
 
     def set_cam_values(self, values: list, active_label: str):
         self._cam_cb["values"] = values
@@ -59,126 +63,176 @@ class CommandBar(tk.Frame):
 
     # ── Build ─────────────────────────────────────────────────────────────────
 
+    def set_toggles(self, **states):
+        for key, value in states.items():
+            if key in self._toggles:
+                self._toggles[key].set(value)
+
     def _build(self):
-        # Bottom border
-        tk.Frame(self, bg=T.BORDER_SUBTLE, height=1).place(
-            relx=0, rely=1.0, anchor="sw", relwidth=1.0
+        self.columnconfigure(0, weight=1)
+        header = tk.Frame(self, bg=T.BG_SURFACE)
+        header.grid(row=0, column=0, sticky=tk.EW, padx=20, pady=(16, 12))
+        header.columnconfigure(1, weight=1)
+        brand = tk.Frame(header, bg=T.BG_SURFACE)
+        brand.grid(row=0, column=0, sticky=tk.W, padx=(0, 32))
+        tk.Label(
+            brand, text="FaceTrak", font=T.FONT_APP, bg=T.BG_SURFACE, fg=T.TEXT_PRIMARY
+        ).pack(anchor=tk.W)
+        self._state_label = tk.Label(
+            brand,
+            text="Camera stopped",
+            font=T.FONT_MICRO,
+            bg=T.BG_SURFACE,
+            fg=T.TEXT_SECONDARY,
         )
+        self._state_label.pack(anchor=tk.W, pady=(2, 0))
 
-        pad = dict(padx=4, pady=0)
-        col = 0
-
-        # ── Logo ──────────────────────────────────────────────────────────────
-        logo = tk.Frame(self, bg=T.BG_SURFACE)
-        logo.grid(row=0, column=col, padx=(16, 8), pady=0); col += 1
-
-        logo_dot = tk.Canvas(logo, width=8, height=8, bg=T.BG_SURFACE,
-                              highlightthickness=0)
-        logo_dot.pack(side=tk.LEFT, padx=(0, 6))
-        logo_dot.create_oval(1, 1, 7, 7, fill=T.ACCENT, outline="")
-
-        tk.Label(logo, text="FACETRAK", fg=T.TEXT_PRIMARY, bg=T.BG_SURFACE,
-                 font=T.FONT_APP).pack(side=tk.LEFT)
-        tk.Label(logo, text="  v2", fg=T.TEXT_MUTED, bg=T.BG_SURFACE,
-                 font=T.FONT_MICRO).pack(side=tk.LEFT, pady=(4, 0))
-
-        _sep(self).grid(row=0, column=col, sticky=tk.NS, padx=8, pady=12); col += 1
-
-        # ── Primary actions ───────────────────────────────────────────────────
-        self._start_btn = Button(self, f"{T.ICON_PLAY}  Start",
-                                  self._cb["toggle_start"], variant="success",
-                                  width=92, bg=T.BG_SURFACE)
-        self._start_btn.grid(row=0, column=col, **pad); col += 1
-
-        self._rec_btn = Button(self, f"{T.ICON_REC}  Record",
-                                self._cb["toggle_rec"], variant="default",
-                                width=100, bg=T.BG_SURFACE)
-        self._rec_btn.set_enabled(False)
-        self._rec_btn.grid(row=0, column=col, **pad); col += 1
-
-        _sep(self).grid(row=0, column=col, sticky=tk.NS, padx=8, pady=12); col += 1
-
-        # ── Toggles ───────────────────────────────────────────────────────────
-        for label, key in [
-            (f"{T.ICON_BLUR} Blur",    "toggle_blur"),
-            (f"{T.ICON_HEAT} Heatmap", "toggle_heatmap"),
-            (f"{T.ICON_SERVO} Servo",  "toggle_servo"),
-            (f"{T.ICON_MIRROR} Mirror","toggle_mirror"),
-        ]:
-            cb = self._make_check(self, label, self._cb[key])
-            cb.grid(row=0, column=col, **pad); col += 1
-
-        _sep(self).grid(row=0, column=col, sticky=tk.NS, padx=8, pady=12); col += 1
-
-        # ── DB actions ────────────────────────────────────────────────────────
-        Button(self, f"{T.ICON_REG} Register", self._cb["register_dialog"],
-               variant="primary", bg=T.BG_SURFACE
-               ).grid(row=0, column=col, **pad); col += 1
-        Button(self, f"{T.ICON_DIR} Directory", self._cb["list_faces"],
-               variant="default", bg=T.BG_SURFACE
-               ).grid(row=0, column=col, **pad); col += 1
-
-        _sep(self).grid(row=0, column=col, sticky=tk.NS, padx=8, pady=12); col += 1
-
-        # ── Target dropdown ───────────────────────────────────────────────────
-        tk.Label(self, text="TARGET", fg=T.TEXT_MUTED, bg=T.BG_SURFACE,
-                 font=T.FONT_MICRO).grid(row=0, column=col, padx=(4, 2)); col += 1
-
-        from facetrak.core.engine import (
-            SERVO_TARGET_LARGEST, SERVO_TARGET_KNOWN, SERVO_TARGET_UNKNOWN
-        )
-        self._srv_var = tk.StringVar(value=SERVO_TARGET_LARGEST)
-        srv = self._styled_combo(self._srv_var,
-                                  [SERVO_TARGET_LARGEST, SERVO_TARGET_KNOWN,
-                                   SERVO_TARGET_UNKNOWN], width=11)
-        srv.grid(row=0, column=col, **pad); col += 1
-        srv.bind("<<ComboboxSelected>>",
-                 lambda _: self._cb["set_servo_target"](self._srv_var.get()))
-
-        # ── Source dropdown ───────────────────────────────────────────────────
-        tk.Label(self, text="SOURCE", fg=T.TEXT_MUTED, bg=T.BG_SURFACE,
-                 font=T.FONT_MICRO).grid(row=0, column=col, padx=(8, 2)); col += 1
-
+        source = tk.Frame(header, bg=T.BG_SURFACE)
+        source.grid(row=0, column=1, sticky=tk.W)
+        tk.Label(
+            source,
+            text="Camera source",
+            font=T.FONT_MICRO,
+            bg=T.BG_SURFACE,
+            fg=T.TEXT_SECONDARY,
+        ).pack(anchor=tk.W)
         self._cam_var = tk.StringVar()
-        self._cam_cb = self._styled_combo(self._cam_var, [], width=16)
-        self._cam_cb.grid(row=0, column=col, **pad); col += 1
+        self._cam_cb = self._styled_combo(source, self._cam_var, [], width=22)
+        self._cam_cb.pack(pady=(4, 0))
         self._cam_cb.bind("<<ComboboxSelected>>", self._cb["on_cam_select"])
 
-        # ── Spacer ────────────────────────────────────────────────────────────
-        self.columnconfigure(col, weight=1); col += 1
+        self._start_btn = Button(
+            header,
+            "▶  Start camera",
+            self._cb["toggle_start"],
+            variant="primary",
+            width=155,
+            height=42,
+        )
+        self._start_btn.grid(row=0, column=2, padx=(16, 8))
+        self._rec_btn = Button(
+            header, "●  Record", self._cb["toggle_rec"], width=120, height=42
+        )
+        self._rec_btn.set_enabled(False)
+        self._rec_btn.grid(row=0, column=3)
 
-        # ── Simulation ────────────────────────────────────────────────────────
-        Button(self, f"{T.ICON_SIM} Simulation", self._cb["open_sim"],
-               variant="ghost", bg=T.BG_SURFACE
-               ).grid(row=0, column=col, padx=(0, 16))
+        tk.Frame(self, bg=T.BORDER_SUBTLE, height=1).grid(
+            row=1, column=0, sticky=tk.EW, padx=20
+        )
+        tools = tk.Frame(self, bg=T.BG_SURFACE)
+        tools.grid(row=2, column=0, sticky=tk.EW, padx=20, pady=12)
+        tools.columnconfigure(1, weight=1)
+        view = tk.Frame(tools, bg=T.BG_SURFACE)
+        view.grid(row=0, column=0, sticky=tk.W)
+        self._toggles = {}
+        for label, key in [
+            ("Blur unknown", "blur"),
+            ("Heatmap", "heatmap"),
+            ("Servo", "servo"),
+            ("Mirror", "mirror"),
+        ]:
+            var = tk.BooleanVar(value=False)
+            self._toggles[key] = var
+            self._make_check(view, label, self._cb["toggle_" + key], var).pack(
+                side=tk.LEFT, padx=(0, 14)
+            )
 
-    def _make_check(self, parent: tk.Frame, text: str, cmd: Callable) -> ttk.Checkbutton:
+        from facetrak.core.engine import (
+            SERVO_TARGET_KNOWN,
+            SERVO_TARGET_LARGEST,
+            SERVO_TARGET_UNKNOWN,
+        )
+
+        target = tk.Frame(view, bg=T.BG_SURFACE)
+        target.pack(side=tk.LEFT)
+        tk.Label(
+            target,
+            text="Track",
+            font=T.FONT_MICRO,
+            bg=T.BG_SURFACE,
+            fg=T.TEXT_SECONDARY,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        self._srv_var = tk.StringVar(value=SERVO_TARGET_LARGEST)
+        combo = self._styled_combo(
+            target,
+            self._srv_var,
+            [SERVO_TARGET_LARGEST, SERVO_TARGET_KNOWN, SERVO_TARGET_UNKNOWN],
+            width=10,
+        )
+        combo.pack(side=tk.LEFT)
+        combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _: self._cb["set_servo_target"](self._srv_var.get()),
+        )
+
+        actions = tk.Frame(tools, bg=T.BG_SURFACE)
+        actions.grid(row=0, column=1, sticky=tk.E)
+        self._register_btn = Button(actions, "Add person", self._cb["register_dialog"])
+        self._register_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self._register_btn.set_enabled(False)
+        Button(actions, "Directory", self._cb["list_faces"], variant="ghost").pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
+        Button(actions, "Simulation", self._cb["open_sim"], variant="ghost").pack(
+            side=tk.LEFT
+        )
+
+        # Keep every action reachable when the window is narrower than both groups.
+        def reflow(event):
+            needed = view.winfo_reqwidth() + actions.winfo_reqwidth() + 24
+            if event.width < needed:
+                actions.grid_configure(
+                    row=1, column=0, columnspan=2, sticky=tk.W, pady=(10, 0)
+                )
+            else:
+                actions.grid_configure(
+                    row=0, column=1, columnspan=1, sticky=tk.E, pady=0
+                )
+
+        tools.bind("<Configure>", reflow)
+
+    def _make_check(self, parent, text, cmd, variable):
         style = ttk.Style()
-        style.configure("Bar.TCheckbutton",
-                         background=T.BG_SURFACE,
-                         foreground=T.TEXT_SECONDARY,
-                         focuscolor="none")
-        style.map("Bar.TCheckbutton",
-                  background=[("active", T.BG_SURFACE)],
-                  foreground=[("active", T.TEXT_PRIMARY)])
-        cb = ttk.Checkbutton(parent, text=text, style="Bar.TCheckbutton",
-                              command=cmd)
-        cb.state(["!alternate"])
-        return cb
+        style.configure(
+            "Bar.TCheckbutton",
+            background=T.BG_SURFACE,
+            foreground=T.TEXT_SECONDARY,
+            font=T.FONT_LABEL,
+            focuscolor=T.BORDER_FOCUS,
+            padding=(0, 6),
+        )
+        style.map(
+            "Bar.TCheckbutton",
+            background=[("active", T.BG_SURFACE)],
+            foreground=[("active", T.TEXT_PRIMARY)],
+        )
+        return ttk.Checkbutton(
+            parent, text=text, style="Bar.TCheckbutton", variable=variable, command=cmd
+        )
 
-    def _styled_combo(self, var: tk.StringVar, values: list,
-                       width: int = 12) -> ttk.Combobox:
+    def _styled_combo(self, parent, var, values, width=12):
         style = ttk.Style()
-        style.configure("Bar.TCombobox",
-                         background=T.BG_OVERLAY,
-                         foreground=T.TEXT_PRIMARY,
-                         fieldbackground=T.BG_OVERLAY,
-                         arrowcolor=T.TEXT_SECONDARY,
-                         selectbackground=T.ACCENT,
-                         selectforeground=T.TEXT_PRIMARY)
-        style.map("Bar.TCombobox",
-                  fieldbackground=[("readonly", T.BG_OVERLAY)],
-                  foreground=[("readonly", T.TEXT_PRIMARY)])
-        return ttk.Combobox(self, textvariable=var, values=values,
-                             state="readonly", width=width,
-                             style="Bar.TCombobox")
+        style.configure(
+            "Bar.TCombobox",
+            background=T.BG_OVERLAY,
+            foreground=T.TEXT_PRIMARY,
+            fieldbackground=T.BG_OVERLAY,
+            arrowcolor=T.TEXT_SECONDARY,
+            padding=6,
+            selectbackground=T.ACCENT_DIM,
+            selectforeground=T.TEXT_PRIMARY,
+        )
+        style.map(
+            "Bar.TCombobox",
+            fieldbackground=[("readonly", T.BG_OVERLAY)],
+            foreground=[("readonly", T.TEXT_PRIMARY)],
+        )
+        return ttk.Combobox(
+            parent,
+            textvariable=var,
+            values=values,
+            state="readonly",
+            width=width,
+            font=T.FONT_LABEL,
+            style="Bar.TCombobox",
+        )

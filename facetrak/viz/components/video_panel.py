@@ -1,4 +1,5 @@
 """Video canvas + face thumbnail strip."""
+
 import io
 import tkinter as tk
 
@@ -6,8 +7,6 @@ import cv2
 from PIL import Image
 
 from .. import theme as T
-
-_MAX_W = 800
 
 
 class VideoPanel(tk.Frame):
@@ -17,6 +16,7 @@ class VideoPanel(tk.Frame):
         super().__init__(parent, bg=T.BG_ROOT, **kw)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
+        self._frame_image = None
         self._tk_img = None
         self._thumbs: list[tk.Label] = []
         self._build()
@@ -25,19 +25,31 @@ class VideoPanel(tk.Frame):
 
     def show_frame(self, bgr_frame):
         """Render a BGR OpenCV frame onto the canvas."""
-        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-        h, w = rgb.shape[:2]
-        if w > _MAX_W:
-            s = _MAX_W / w
-            rgb = cv2.resize(rgb, (_MAX_W, int(h * s)))
-        img = Image.fromarray(rgb)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        self._tk_img = tk.PhotoImage(data=buf.getvalue())
-        self._label.config(image=self._tk_img)
+        self._frame_image = Image.fromarray(cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB))
+        self._placeholder.place_forget()
+        self._render_frame()
+
+    def _render_frame(self, _=None):
+        if self._frame_image is None:
+            return
+        w, h = self._canvas.winfo_width(), self._canvas.winfo_height()
+        if w < 2 or h < 2:
+            return
+        iw, ih = self._frame_image.size
+        scale = min(w / iw, h / ih)
+        size = (max(1, int(iw * scale)), max(1, int(ih * scale)))
+        image = self._frame_image.resize(size, Image.Resampling.BILINEAR)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        self._tk_img = tk.PhotoImage(data=buffer.getvalue(), master=self)
+        self._canvas.itemconfigure(self._image_id, image=self._tk_img)
+        self._canvas.coords(self._image_id, w / 2, h / 2)
 
     def clear(self):
-        self._label.config(image="")
+        self._frame_image = None
+        self._canvas.itemconfigure(self._image_id, image="")
+        self._tk_img = None
+        self._placeholder.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
         self._clear_strip()
 
     def update_strip(self, tracker_active, frame):
@@ -62,17 +74,25 @@ class VideoPanel(tk.Frame):
         inner.columnconfigure(0, weight=1)
         inner.rowconfigure(0, weight=1)
 
-        canvas = tk.Canvas(inner, bg=T.BG_SURFACE, highlightthickness=0)
-        canvas.grid(row=0, column=0, sticky=tk.NSEW)
-        self._label = tk.Label(canvas, bg=T.BG_SURFACE)
-        canvas.create_window(0, 0, window=self._label, anchor=tk.NW, tags="vid")
+        self._canvas = tk.Canvas(
+            inner, bg=T.BG_ROOT, highlightthickness=0, width=480, height=300
+        )
+        self._canvas.grid(row=0, column=0, sticky=tk.NSEW)
+        self._image_id = self._canvas.create_image(0, 0, anchor=tk.CENTER)
+        self._canvas.bind("<Configure>", self._render_frame)
 
         # Placeholder text
         self._placeholder = tk.Label(
-            inner,
-            text=f"{T.ICON_CAM}  No Camera Feed",
-            fg=T.TEXT_MUTED, bg=T.BG_SURFACE,
-            font=T.FONT_TITLE,
+            self._canvas,
+            text=(
+                "Your camera workspace\n\n"
+                "Choose a source above, then start the camera.\n"
+                "Live tracking and recognition will appear here."
+            ),
+            fg=T.TEXT_SECONDARY,
+            bg=T.BG_ROOT,
+            font=T.FONT_LABEL,
+            justify=tk.CENTER,
         )
         self._placeholder.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
@@ -81,11 +101,15 @@ class VideoPanel(tk.Frame):
         strip_outer.grid(row=1, column=0, sticky=tk.EW, pady=(8, 0))
 
         # Strip label
-        tk.Label(strip_outer, text="DETECTED SUBJECTS",
-                 fg=T.TEXT_MUTED, bg=T.BG_ROOT,
-                 font=T.FONT_MICRO).pack(side=tk.LEFT, padx=(2, 8))
+        tk.Label(
+            strip_outer,
+            text="Detected people",
+            fg=T.TEXT_MUTED,
+            bg=T.BG_ROOT,
+            font=T.FONT_MICRO,
+        ).pack(side=tk.LEFT, padx=(2, 8))
 
-        self._strip = tk.Frame(strip_outer, bg=T.BG_ROOT, height=58)
+        self._strip = tk.Frame(strip_outer, bg=T.BG_ROOT, height=76)
         self._strip.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self._strip.pack_propagate(False)
 
@@ -106,7 +130,6 @@ class VideoPanel(tk.Frame):
 
         # Compose frame (border + thumb)
         framed = Image.new("RGB", (48, 48), border_col)
-        bg_img = Image.new("RGB", (44, 44), T.BG_SURFACE)
         framed.paste(thumb, (2, 2))
         buf = io.BytesIO()
         framed.save(buf, format="PNG")
@@ -119,9 +142,10 @@ class VideoPanel(tk.Frame):
         img_lbl.photo = photo
         img_lbl.pack()
 
-        name = (tracker.name or "?").split()[0][:8]
+        name = (tracker.name or "Unknown").split()[0][:8]
         name_lbl = tk.Label(
-            cell, text=name,
+            cell,
+            text=name,
             fg=T.ACCENT_BRIGHT if known else T.TEXT_MUTED,
             bg=T.BG_ROOT,
             font=T.FONT_MICRO,
