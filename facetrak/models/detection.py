@@ -10,6 +10,7 @@ class FaceDetection:
     w: int
     h: int
     score: float
+    kps: np.ndarray | None = None
 
     @property
     def center(self) -> tuple[int, int]:

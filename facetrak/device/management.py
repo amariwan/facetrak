@@ -2,12 +2,21 @@
 governor. F19 — low-power mode. F20 — GPIO event bridge.
 F14 — servo guided calibration. F15 — predictive servo.
 F16 — multi-axis servo support.
+F21 — Model Registry: manifest, checksums, licensing, versioning.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import platform
 import time
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # ── F13 ───────────────────────────────────────────────────────────
@@ -362,3 +371,224 @@ class GPIOEventBridge:
     def poll(self) -> list[dict]:
         evs, self._events = self._events, []
         return evs
+
+
+# ── F21 Model Registry ──────────────────────────────────────────────
+@dataclass
+class ModelManifest:
+    """Model manifest with version, checksum, license, and compatibility info."""
+    name: str
+    version: str
+    file_path: str
+    sha256: str
+    license: str
+    license_url: str
+    backend: str  # "yunet", "sface", "scrfd", "arcface", "genderage", "landmark", "mediapipe"
+    input_shape: list[int]
+    output_shapes: list[list[int]]
+    embedding_dim: int | None = None
+    commercial_license_required: bool = False
+    source_url: str = ""
+    installed: bool = False
+    active: bool = False
+    load_error: str | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ModelManifest":
+        return cls(**d)
+
+
+class ModelRegistry:
+    """Model registry with manifest, checksum validation, license tracking.
+
+    Features:
+    - Model manifest with version, SHA256, license metadata
+    - Checksum validation on load
+    - License compliance tracking (commercial vs research)
+    - Backend compatibility matrix
+    - Installation/activation status
+    - Offline installation support
+    - No auto-download without explicit license consent
+    """
+
+    def __init__(self, config: dict | None = None):
+        cfg = config or {}
+        self.models_dir = Path(cfg.get("model_registry", {}).get("models_dir", "models"))
+        self.manifest_path = self.models_dir / "manifest.json"
+        self.auto_download = bool(cfg.get("model_registry", {}).get("auto_download", False))
+        self.require_license_consent = bool(cfg.get("model_registry", {}).get("require_license_consent", True))
+        self.offline_models_dir = Path(cfg.get("model_registry", {}).get("offline_models_dir", "models/offline"))
+
+        self._manifests: dict[str, ModelManifest] = {}
+        self._load_manifest()
+
+    def _load_manifest(self) -> None:
+        """Load manifest from disk."""
+        if self.manifest_path.exists():
+            try:
+                with open(self.manifest_path) as f:
+                    data = json.load(f)
+                for m in data.get("models", []):
+                    manifest = ModelManifest.from_dict(m)
+                    self._manifests[manifest.name] = manifest
+                logger.info("Loaded %d model manifests", len(self._manifests))
+            except Exception as exc:
+                logger.warning("Failed to load model manifest: %s", exc)
+
+    def _save_manifest(self) -> None:
+        """Save manifest to disk."""
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+        data = {
+            "version": "1.0",
+            "models": [m.to_dict() for m in self._manifests.values()],
+        }
+        with open(self.manifest_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def register(self, manifest: ModelManifest) -> bool:
+        """Register a model manifest."""
+        # Verify file exists
+        file_path = self.models_dir / manifest.file_path
+        if not file_path.exists():
+            # Check offline directory
+            offline_path = self.offline_models_dir / manifest.file_path
+            if offline_path.exists():
+                import shutil
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(offline_path, file_path)
+            else:
+                manifest.load_error = f"Model file not found: {manifest.file_path}"
+                manifest.installed = False
+                self._manifests[manifest.name] = manifest
+                self._save_manifest()
+                return False
+
+        # Verify checksum
+        if manifest.sha256:
+            if not self._verify_checksum(file_path, manifest.sha256):
+                manifest.load_error = "Checksum mismatch"
+                manifest.installed = False
+                self._manifests[manifest.name] = manifest
+                self._save_manifest()
+                return False
+
+        manifest.installed = True
+        manifest.load_error = None
+        self._manifests[manifest.name] = manifest
+        self._save_manifest()
+        return True
+
+    def _verify_checksum(self, file_path: Path, expected_sha256: str) -> bool:
+        """Verify SHA256 checksum."""
+        if not expected_sha256:
+            return True
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        return sha256.hexdigest() == expected_sha256
+
+    def compute_checksum(self, file_path: Path) -> str:
+        """Compute SHA256 of a file."""
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+
+    def get(self, name: str) -> ModelManifest | None:
+        return self._manifests.get(name)
+
+    def list_models(self, backend: str | None = None, installed_only: bool = False) -> list[ModelManifest]:
+        models = list(self._manifests.values())
+        if backend:
+            models = [m for m in models if m.backend == backend]
+        if installed_only:
+            models = [m for m in models if m.installed]
+        return models
+
+    def activate(self, name: str) -> bool:
+        """Mark model as active."""
+        if name not in self._manifests:
+            return False
+        # Deactivate other models of same backend
+        backend = self._manifests[name].backend
+        for m in self._manifests.values():
+            if m.backend == backend:
+                m.active = False
+        self._manifests[name].active = True
+        self._save_manifest()
+        return True
+
+    def get_active(self, backend: str) -> ModelManifest | None:
+        for m in self._manifests.values():
+            if m.backend == backend and m.active:
+                return m
+        return None
+
+    def set_load_error(self, name: str, error: str) -> None:
+        if name in self._manifests:
+            self._manifests[name].load_error = error
+            self._manifests[name].installed = False
+            self._save_manifest()
+
+    def verify_all(self) -> dict[str, bool]:
+        """Verify checksums of all installed models."""
+        results = {}
+        for name, manifest in self._manifests.items():
+            if manifest.installed:
+                file_path = self.models_dir / manifest.file_path
+                if file_path.exists():
+                    results[name] = self._verify_checksum(file_path, manifest.sha256)
+                else:
+                    results[name] = False
+        return results
+
+    def get_license_status(self) -> dict:
+        """Get license compliance status."""
+        commercial_required = [m for m in self._manifests.values() if m.commercial_license_required and m.installed]
+        return {
+            "total_models": len(self._manifests),
+            "installed": len([m for m in self._manifests.values() if m.installed]),
+            "commercial_license_required": len(commercial_required),
+            "models_requiring_license": [m.name for m in commercial_required],
+            "license_consent_required": self.require_license_consent,
+        }
+
+    def install_from_offline(self, name: str) -> bool:
+        """Install model from offline directory."""
+        manifest = self._manifests.get(name)
+        if not manifest:
+            return False
+        offline_path = self.offline_models_dir / manifest.file_path
+        if not offline_path.exists():
+            manifest.load_error = f"Offline model not found: {offline_path}"
+            self._save_manifest()
+            return False
+
+        target_path = self.models_dir / manifest.file_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copy2(offline_path, target_path)
+
+        return self.register(manifest)
+
+    def create_manifest_template(self, name: str, backend: str, file_path: str) -> ModelManifest:
+        """Create a manifest template for manual completion."""
+        return ModelManifest(
+            name=name,
+            version="1.0",
+            file_path=file_path,
+            sha256="",  # User must fill
+            license="",  # User must fill
+            license_url="",
+            backend=backend,
+            input_shape=[1, 3, 640, 640],
+            output_shapes=[[1, 100, 4]],
+            embedding_dim=None,
+            commercial_license_required=True,
+            source_url="",
+        )

@@ -33,11 +33,15 @@ hardware = ["picamera2>=0.3; sys_platform == 'linux'",
             "RPi.GPIO>=0.7; sys_platform == 'linux'"]
 # Full AI suite
 ai = ["ultralytics>=8.0"]
+# InsightFace optional backends (ONNX Runtime; CPU on ARM64/AMD64,
+# CUDA/OpenVINO/CoreML providers selected at runtime when available)
+insightface = ["onnxruntime>=1.17"]
 # Everything — Linux-only deps marked
 full = ["picamera2>=0.3; sys_platform == 'linux'",
         "onvif-zeep>=0.2.12",
         "RPi.GPIO>=0.7; sys_platform == 'linux'",
-        "sounddevice>=0.4", "ultralytics>=8.0"]
+        "sounddevice>=0.4", "ultralytics>=8.0",
+        "onnxruntime>=1.17"]
 
 [project.scripts]
 facetrak = "facetrak.__main__:main"

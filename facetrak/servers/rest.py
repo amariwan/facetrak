@@ -121,6 +121,7 @@ def health():
 @app.get("/status")
 def status(_: bool = Depends(require_auth)):
     e = _get()
+    adapter = getattr(e, "insightface_adapter", None)
     return {
         "running":       e.running,
         "camera":        e.current_cam_idx,
@@ -134,6 +135,14 @@ def status(_: bool = Depends(require_auth)):
         "masks":         len(e.masks),
         "mqtt":          {"enabled": e.mqtt.enabled,
                           "connected": e.mqtt.connected},
+        "detector_backend": e.cfg.get("detector_backend", "yunet"),
+        "recognition_backend": e.cfg.get("recognition_backend", "sface"),
+        "liveness_backend": e.cfg.get("liveness_backend", "mediapipe"),
+        "insightface": {
+            "enabled": bool(e.cfg.get("insightface", {}).get("enabled", False)),
+            "available": bool(adapter and adapter.available),
+            "provider": getattr(adapter, "provider_name", None),
+        },
     }
 
 

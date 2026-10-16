@@ -80,5 +80,55 @@
   "pir_enabled": false,
   "pir_gpio_pin": 17,
   "depth_enabled": false,
-  "mirror": false
+  "mirror": false,
+  "insightface": {
+    "enabled": false,
+    "provider": "CPUExecutionProvider",
+    "model_pack": "buffalo_l",
+    "models_dir": "models/insightface",
+    "auto_download": false,
+    "require_license_consent": true
+  },
+  "detector_backend": "yunet",
+  "recognition_backend": "sface",
+  "liveness_backend": "mediapipe",
+  "scrfd": {
+    "model": "det_10g",
+    "input_size": [
+      640,
+      640
+    ],
+    "score_threshold": 0.5,
+    "nms_threshold": 0.4,
+    "max_num": 20,
+    "use_kps": true
+  },
+  "arcface": {
+    "model": "w600k_r50",
+    "input_size": [
+      112,
+      112
+    ],
+    "embedding_dim": 512,
+    "norm_embedding": true
+  },
+  "anonymization": {
+    "enabled": false,
+    "detector_backend": "yunet",
+    "recognition_backend": "none",
+    "method": "gaussian",
+    "box_scale": 1.15,
+    "gaussian_ksize": 51,
+    "gaussian_sigma": 30.0,
+    "mosaic_block": 20,
+    "detect_every": 1,
+    "max_faces": 50,
+    "min_face_size": 20
+  },
+  "model_registry": {
+    "models_dir": "models",
+    "auto_download": false,
+    "require_license_consent": true,
+    "offline_models_dir": "models/offline"
+  }
 }

@@ -15,7 +15,7 @@ from facetrak.events import ZoneManager, load_masks
 from facetrak.hardware.recorder import VideoRecorder
 from facetrak.hardware.servo import PanTiltController
 from facetrak.integrations.mqtt import MQTTPublisher
-from facetrak.models import FaceMetrics
+from facetrak.models import FaceDetection, FaceMetrics
 from facetrak.models.track import Track
 from facetrak.platform.resources import ResourceGuard
 from facetrak.recog import (
@@ -25,7 +25,11 @@ from facetrak.recog import (
     FaceTracker,
     YuNetDetector,
     quality_score,
+    SCRFDDetector,
+    ArcFaceRecognizer,
+    InsightFaceAdapter,
 )
+from facetrak.device.management import ModelRegistry
 from facetrak.sensors import AudioMonitor, DepthEstimator, PIRSensor
 from facetrak.storage import (
     CrowdMonitor,
@@ -92,10 +96,18 @@ class FaceEngine:
         self.last_audio_events: list = []
         self.last_motion: bool = False
 
-        self.detector: YuNetDetector | None = None
+        # Detector backend: YuNetDetector or SCRFDDetector
+        self.detector: YuNetDetector | SCRFDDetector | None = None
         self.cam: CameraSource | None = None
         self.cameras: list[CameraSource] = []
         self.running = False
+
+        # InsightFace adapter for optional models
+        self.insightface_adapter: InsightFaceAdapter | None = None
+        self.arcface: ArcFaceRecognizer | None = None
+
+        # Model registry
+        self.model_registry: ModelRegistry | None = None
 
         self.blur_enabled    = self.cfg.get("blur_unknown", False)
         self.blur_persons: set[str] = set(self.cfg.get("blur_persons", []))
@@ -151,6 +163,25 @@ class FaceEngine:
         self._samples_buffer: list[np.ndarray] = []
         self._capturing = False
 
+        # InsightFace adapter (optional)
+        if self.cfg.get("insightface", {}).get("enabled", False):
+            self.insightface_adapter = InsightFaceAdapter(self.cfg.get("insightface", {}))
+            if self.insightface_adapter and self.insightface_adapter.available:
+                logger.info("InsightFace adapter initialized: %s", self.insightface_adapter.provider_name)
+            else:
+                logger.warning("InsightFace adapter not available: %s", self.insightface_adapter.init_error if self.insightface_adapter else "not created")
+
+        # ArcFace recognizer (optional)
+        if self.cfg.get("recognition_backend") == "arcface" and self.insightface_adapter and self.insightface_adapter.available:
+            self.arcface = ArcFaceRecognizer(adapter=self.insightface_adapter)
+            if self.arcface.ready:
+                logger.info("ArcFace recognizer ready: %dd embeddings", self.arcface.embedding_dim)
+            else:
+                logger.warning("ArcFace recognizer not ready")
+
+        # Model registry
+        self.model_registry = ModelRegistry(self.cfg)
+
         self.metrics      = FaceMetrics()
         self.last_face_center = (0, 0)
         self.last_face_size   = (0, 0)
@@ -190,8 +221,17 @@ class FaceEngine:
             return False
 
         w, h = self.cam.resolution
+        # Initialize detector based on backend config
         if self.detector is None:
-            self.detector = YuNetDetector()
+            detector_backend = self.cfg.get("detector_backend", "yunet")
+            if detector_backend == "scrfd" and self.insightface_adapter and self.insightface_adapter.available:
+                self.detector = SCRFDDetector(adapter=self.insightface_adapter)
+                if not self.detector.ready:
+                    logger.warning("SCRFD not ready, falling back to YuNet")
+                    self.detector = YuNetDetector()
+            else:
+                self.detector = YuNetDetector()
+
         self.db.load()
         if self.analyzer is not None:
             self.analyzer.load_model(w, h)
@@ -249,6 +289,11 @@ class FaceEngine:
         self.mqtt.stop()
         if self.servo.connected:
             self.servo.disconnect()
+        # Release InsightFace components
+        if self.insightface_adapter:
+            self.insightface_adapter.release()
+        self.insightface_adapter = None
+        self.arcface = None
         cfgmod.save(self.cfg)
 
     # ── per-frame pipeline ───────────────────────────────
@@ -387,20 +432,46 @@ class FaceEngine:
                            interpolation=cv2.INTER_LINEAR)
         return small, scale
 
+    def _align_face_for_arcface(self, frame: np.ndarray, det: FaceDetection) -> np.ndarray | None:
+        """Align face for ArcFace using 5-point landmarks from detector."""
+        if det.kps is not None and self.detector is not None and hasattr(self.detector, 'align_face'):
+            return self.detector.align_face(frame, det)
+
+        # Fallback: simple crop and resize to 112x112
+        x, y, w, h = det.x, det.y, det.w, det.h
+        crop = frame[y:y+h, x:x+w]
+        if crop.size == 0:
+            return None
+        return cv2.resize(crop, (112, 112), interpolation=cv2.INTER_LINEAR)
+
     def _identify(self, small: np.ndarray, tracks: list, full_frame: np.ndarray):
+        # Choose embedding extractor based on recognition backend
+        recognition_backend = self.cfg.get("recognition_backend", "sface")
+
         for t in tracks:
             needs = (t.name is None
                      or self._frame_no % _EMBED_EVERY == 0)
             if not needs:
                 continue
-            emb = self.db.embed(small, t.det.row)
-            if t.name is None and emb is not None:
-                reid = self.tracker.try_reid(t.track_id, emb)
-                if reid:
-                    t.name = reid
-                    t.announced = True
+
+            if recognition_backend == "arcface" and self.arcface and self.arcface.ready:
+                # ArcFace: need aligned face crop. ArcFace DB wiring is
+                # optional; without a registered ArcFace gallery we can only
+                # extract the embedding and skip identification.
+                aligned = self._align_face_for_arcface(full_frame, t.det)
+                emb = self.arcface.extract(aligned) if aligned is not None else None
+                name, sim = None, 0.0
+            else:
+                # SFace (default)
+                emb = self.db.embed(small, t.det.row)
+                if t.name is None and emb is not None:
+                    reid = self.tracker.try_reid(t.track_id, emb)
+                    if reid:
+                        t.name = reid
+                        t.announced = True
+                name, sim = self.db.predict(emb, self.recog_threshold)
+
             self.tracker.set_embedding(t.track_id, emb)
-            name, sim = self.db.predict(emb, self.recog_threshold)
             t.vote(name, sim)
             if t.name and self.cfg.get("notifications", True):
                 self.notifier.notify(t.name)

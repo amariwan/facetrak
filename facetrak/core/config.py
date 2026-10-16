@@ -135,6 +135,62 @@ DEFAULT_CONFIG = {
     "gesture_actions": {"enabled": False, "bindings": {},
                         "min_conf": 0.8, "cooldown_s": 5.0},
     "rbac": {"enabled": False, "users": {}},
+
+    # ── InsightFace Integration (optional, opt-in) ──
+    "insightface": {
+        "enabled": False,
+        "provider": "CPUExecutionProvider",
+        "model_pack": "buffalo_l",
+        "models_dir": "models/insightface",
+        "auto_download": False,
+        "require_license_consent": True,
+    },
+
+    # ── Detector/Recognizer Backend Selection ──
+    "detector_backend": "yunet",
+    "recognition_backend": "sface",
+    "liveness_backend": "mediapipe",
+
+    # ── SCRFD Detector Config ──
+    "scrfd": {
+        "model": "det_10g",
+        "input_size": [640, 640],
+        "score_threshold": 0.5,
+        "nms_threshold": 0.4,
+        "max_num": 20,
+        "use_kps": True,
+    },
+
+    # ── ArcFace Recognition Config ──
+    "arcface": {
+        "model": "w600k_r50",
+        "input_size": [112, 112],
+        "embedding_dim": 512,
+        "norm_embedding": True,
+    },
+
+    # ── Anonymization (PrivateFrame-inspired) ──
+    "anonymization": {
+        "enabled": False,
+        "detector_backend": "yunet",
+        "recognition_backend": "none",
+        "method": "gaussian",
+        "box_scale": 1.15,
+        "gaussian_ksize": 51,
+        "gaussian_sigma": 30.0,
+        "mosaic_block": 20,
+        "detect_every": 1,
+        "max_faces": 50,
+        "min_face_size": 20,
+    },
+
+    # ── Model Registry ──
+    "model_registry": {
+        "models_dir": "models",
+        "auto_download": False,
+        "require_license_consent": True,
+        "offline_models_dir": "models/offline",
+    },
 }
 
 

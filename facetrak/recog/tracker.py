@@ -24,17 +24,34 @@ def _iou(a: FaceDetection, b: FaceDetection) -> float:
 
 
 class FaceTracker:
-    def __init__(self):
+    def __init__(self, iou_match: float = _IOU_MATCH,
+                 max_missed: int = _MAX_MISSED,
+                 reid_timeout: float = _REID_TIMEOUT,
+                 reid_sim: float = _REID_SIM):
         self.tracks: list[Track] = []
         self._next_id = 1
         self._lost: list[_LostTrack] = []
         self._id_lock = threading.Lock()
+        self.iou_match = iou_match
+        self.max_missed = max_missed
+        self.reid_timeout = reid_timeout
+        self.reid_sim = reid_sim
+        # Legacy aliases: keep instance attrs in sync so external code that
+        # sets tracker._IOU_MATCH keeps working.
+        self._IOU_MATCH = iou_match
+        self._MAX_MISSED = max_missed
+
+    def _thresholds(self) -> tuple[float, int, float, float]:
+        iou = getattr(self, "_IOU_MATCH", self.iou_match)
+        missed = getattr(self, "_MAX_MISSED", self.max_missed)
+        return iou, missed, self.reid_timeout, self.reid_sim
 
     def update(self, detections: list[FaceDetection]
                ) -> tuple[list[Track], list[Track]]:
+        iou_match, max_missed, reid_timeout, _ = self._thresholds()
         now = time.monotonic()
         self._lost = [l for l in self._lost
-                      if now - l.lost_at < _REID_TIMEOUT]
+                      if now - l.lost_at < reid_timeout]
 
         unmatched = list(detections)
         for track in self.tracks:
@@ -43,7 +60,7 @@ class FaceTracker:
                 iou = _iou(track.det, det)
                 if iou > best_iou:
                     best_iou, best_det = iou, det
-            if best_det is not None and best_iou >= _IOU_MATCH:
+            if best_det is not None and best_iou >= iou_match:
                 unmatched.remove(best_det)
                 track.det = best_det
                 track.last_seen = now
@@ -51,12 +68,12 @@ class FaceTracker:
             else:
                 track.missed += 1
 
-        ended = [t for t in self.tracks if t.missed > _MAX_MISSED]
+        ended = [t for t in self.tracks if t.missed > max_missed]
         for t in ended:
             if t.embedding is not None:
                 self._lost.append(
                     _LostTrack(t.track_id, t.name, t.embedding))
-        self.tracks = [t for t in self.tracks if t.missed <= _MAX_MISSED]
+        self.tracks = [t for t in self.tracks if t.missed <= max_missed]
 
         for det in unmatched:
             with self._id_lock:
@@ -76,6 +93,7 @@ class FaceTracker:
     def try_reid(self, track_id: int, emb: np.ndarray | None) -> str | None:
         if emb is None or not self._lost:
             return None
+        _, _, _, reid_sim = self._thresholds()
         best_sim, best = 0.0, None
         for lost in self._lost:
             if lost.embedding is None:
@@ -83,7 +101,7 @@ class FaceTracker:
             sim = float(emb @ lost.embedding)
             if sim > best_sim:
                 best_sim, best = sim, lost
-        if best is not None and best_sim >= _REID_SIM:
+        if best is not None and best_sim >= reid_sim:
             self._lost.remove(best)
             return best.name
         return None
